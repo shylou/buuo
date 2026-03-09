@@ -5,7 +5,7 @@
 
 import { EventEmitter } from 'eventemitter3';
 import type { Channel, IncomingMessage } from '../channels/interface.js';
-import type { AIProvider } from '../providers/interface.js';
+import type { AIProvider, ChatResponse } from '../providers/interface.js';
 import type { PluginManager } from '../plugins/manager.js';
 import type { ConfigStore } from '../config/store.js';
 import type { Logger } from '../utils/logger.js';
@@ -270,7 +270,8 @@ export class Gateway extends EventEmitter {
 
       for await (const response of responses) {
         // Handle thinking events - IMMEDIATE update on first one
-        if (response.thinking) {
+        // Validate thinking object has required structure
+        if (response.thinking && typeof response.thinking === 'object' && response.thinking.type) {
           if (immediateUpdateTimer) {
             clearTimeout(immediateUpdateTimer);
             immediateUpdateTimer = undefined;
@@ -344,12 +345,22 @@ export class Gateway extends EventEmitter {
         immediateUpdateTimer = undefined;
       }
 
-      // Send error message
+      // Send error message to Feishu
       const channelId = message.metadata?.channelId as string;
       const channel = this.router.getChannel(channelId);
-      if (channel && progressMessageId && channel.updateMessage) {
-        channel.updateMessage(progressMessageId, `❌ **Error:** ${error instanceof Error ? error.message : 'Unknown error'}`)
-          .catch(() => {});
+      const errorMessage = `❌ **Error:** ${error instanceof Error ? error.message : 'Unknown error'}`;
+
+      if (channel) {
+        if (progressMessageId && channel.updateMessage) {
+          // Update existing progress message with error
+          channel.updateMessage(progressMessageId, errorMessage).catch(() => {});
+        } else {
+          // Send new error message (fallback for early errors)
+          channel.sendMessage({
+            conversationId: message.conversationId,
+            content: errorMessage
+          }).catch(() => {});
+        }
       }
 
       console.error('[Gateway] Failed to handle message:', error);
