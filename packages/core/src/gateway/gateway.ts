@@ -214,9 +214,7 @@ export class Gateway extends EventEmitter {
    */
   async handleMessage(message: IncomingMessage): Promise<void> {
     let progressMessageId: string | undefined = undefined;
-    let lastUpdateTime = Date.now();
     const thinkingEvents: string[] = [];
-    let firstThinkingUpdate = false;
     let immediateUpdateTimer: NodeJS.Timeout | undefined = undefined;
 
     try {
@@ -241,64 +239,55 @@ export class Gateway extends EventEmitter {
         throw new Error(`No channel found for: ${channelId}`);
       }
 
-      // Send immediate "thinking" indicator if channel supports updates
-      if (channel.updateMessage) {
-        progressMessageId = await channel.sendMessage({
-          conversationId: message.conversationId,
-          content: '🤔 **Thinking...**'
-        });
-
-        // Immediate update timer (500ms)
-        immediateUpdateTimer = setTimeout(() => {
-          if (!firstThinkingUpdate && progressMessageId && channel.updateMessage) {
-            channel.updateMessage(progressMessageId, '🤔 **Thinking...**\n\n Processing...')
-              .catch(() => {}); // Silently ignore errors
-          }
-        }, 500);
-      }
-
-      // Route to provider
+      // Route to provider FIRST (to start processing immediately)
       console.log('[Gateway] Routing to provider...');
       const startTime = Date.now();
 
       const responses = await this.router.route(session, message);
       console.log('[Gateway] Got response stream');
 
+      // Send "thinking" indicator AFTER getting stream (immediate user feedback)
+      if (channel.updateMessage) {
+        progressMessageId = await channel.sendMessage({
+          conversationId: message.conversationId,
+          content: '🤔 **Thinking...** (0.0s)'
+        });
+
+        // Start periodic time updates every second (immediate feedback)
+        immediateUpdateTimer = setInterval(() => {
+          if (progressMessageId && channel.updateMessage) {
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+            if (thinkingEvents.length > 0) {
+              // Show thinking events if we have them
+              channel.updateMessage(progressMessageId, this.buildThinkingDisplay(elapsed, thinkingEvents))
+                .catch(() => {});
+            } else {
+              // Just show elapsed time while waiting
+              channel.updateMessage(progressMessageId, `🤔 **Thinking...** (${elapsed}s)`)
+                .catch(() => {});
+            }
+          }
+        }, 1000); // Update every second
+      }
+
       // Collect response
       let assistantContent = '';
       let chunkCount = 0;
 
       for await (const response of responses) {
-        // Handle thinking events - IMMEDIATE update on first one
+        // Handle thinking events - add to array for display
         // Validate thinking object has required structure
         if (response.thinking && typeof response.thinking === 'object' && response.thinking.type) {
-          if (immediateUpdateTimer) {
-            clearTimeout(immediateUpdateTimer);
-            immediateUpdateTimer = undefined;
-          }
-
           const thinkingText = this.formatThinkingEvent(response.thinking);
           thinkingEvents.push(thinkingText);
 
-          // Update IMMEDIATELY on first thinking event
-          if (progressMessageId && channel.updateMessage && !firstThinkingUpdate) {
+          // Update IMMEDIATELY when thinking event arrives (don't wait for interval)
+          if (progressMessageId && channel.updateMessage) {
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
             channel.updateMessage(progressMessageId, this.buildThinkingDisplay(elapsed, thinkingEvents))
               .catch(() => {}); // Silently ignore errors
-            lastUpdateTime = Date.now();
-            firstThinkingUpdate = true;
-          } else if (progressMessageId && channel.updateMessage) {
-            // Subsequent updates every 1.5 seconds
-            const now = Date.now();
-            if ((now - lastUpdateTime) > 1500) {
-              const elapsed = ((now - startTime) / 1000).toFixed(1);
-              channel.updateMessage(progressMessageId, this.buildThinkingDisplay(elapsed, thinkingEvents))
-                .catch(() => {}); // Silently ignore errors
-              lastUpdateTime = now;
-            }
           }
         }
-
         // Handle content
         if (response.content) {
           assistantContent += response.content;
@@ -308,7 +297,7 @@ export class Gateway extends EventEmitter {
         if (response.done) {
           // Clear timers
           if (immediateUpdateTimer) {
-            clearTimeout(immediateUpdateTimer);
+            clearInterval(immediateUpdateTimer);
             immediateUpdateTimer = undefined;
           }
 
@@ -341,7 +330,7 @@ export class Gateway extends EventEmitter {
     } catch (error) {
       // Clear timers
       if (immediateUpdateTimer) {
-        clearTimeout(immediateUpdateTimer);
+        clearInterval(immediateUpdateTimer);
         immediateUpdateTimer = undefined;
       }
 
