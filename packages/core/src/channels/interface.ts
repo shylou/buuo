@@ -30,8 +30,15 @@ export interface Channel {
 
   /**
    * Send a message through this channel
+   * @returns Optional message ID for updates (if supported by channel)
    */
-  sendMessage(message: OutgoingMessage): Promise<void>;
+  sendMessage(message: OutgoingMessage): Promise<string | undefined>;
+
+  /**
+   * Update an existing message (optional, for progress feedback)
+   * Not all channels support this feature
+   */
+  updateMessage?(messageId: string, content: string): Promise<void>;
 
   /**
    * Subscribe to incoming message events

@@ -213,6 +213,9 @@ export class Gateway extends EventEmitter {
    * Handle incoming message
    */
   async handleMessage(message: IncomingMessage): Promise<void> {
+    let progressMessageId: string | undefined = undefined;
+    let updateInterval: NodeJS.Timeout | undefined = undefined;
+
     try {
       console.log('[Gateway] handleMessage called:', message.id);
       console.log('[Gateway] User message:', message.content);
@@ -228,17 +231,40 @@ export class Gateway extends EventEmitter {
         content: message.content
       });
 
+      // Get channel from metadata (message comes from a specific channel)
+      const channelId = message.metadata?.channelId as string;
+      const channel = this.router.getChannel(channelId);
+      if (!channel) {
+        throw new Error(`No channel found for: ${channelId}`);
+      }
+
+      // Send immediate "thinking" indicator if channel supports updates
+      if (typeof channel.updateMessage === 'function') {
+        progressMessageId = await channel.sendMessage({
+          conversationId: message.conversationId,
+          content: '🤔 **Thinking...**\n\n_Please wait while I process your request._'
+        });
+      }
+
       // Route to provider
       console.log('[Gateway] Routing to provider...');
+      const startTime = Date.now();
+
+      // Start a progress update animation
+      if (progressMessageId && channel.updateMessage) {
+        const dots = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        let dotIndex = 0;
+        updateInterval = setInterval(() => {
+          channel.updateMessage!(progressMessageId!, `🤔 **Thinking...** ${dots[dotIndex % dots.length]}\n\n_Please wait while I process your request._`);
+          dotIndex++;
+        }, 500);
+      }
+
       const responses = await this.router.route(session, message);
       console.log('[Gateway] Got response stream');
 
       // Collect response and send to channel
       let assistantContent = '';
-      const channel = this.router.getChannelForConversation(message.conversationId);
-      if (!channel) {
-        throw new Error(`No channel found for conversation: ${message.conversationId}`);
-      }
 
       console.log('[Gateway] Processing response stream...');
       let chunkCount = 0;
@@ -246,6 +272,14 @@ export class Gateway extends EventEmitter {
         if (response.content) {
           assistantContent += response.content;
           chunkCount++;
+
+          // Update progress with partial content every 10 chunks
+          if (progressMessageId && channel.updateMessage && chunkCount % 10 === 0) {
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+            const preview = assistantContent.slice(0, 200) + (assistantContent.length > 200 ? '...' : '');
+            channel.updateMessage(progressMessageId, `🤔 **Thinking...** (${elapsed}s)\n\n${preview}`);
+          }
+
           // Show progress every 20 chunks
           if (chunkCount % 20 === 0) {
             process.stdout.write('.');
@@ -253,13 +287,27 @@ export class Gateway extends EventEmitter {
         }
 
         if (response.done) {
+          // Stop progress animation
+          if (updateInterval) {
+            clearInterval(updateInterval);
+            updateInterval = undefined;
+          }
+
           if (chunkCount > 0) process.stdout.write('\n');
-          console.log(`[Gateway] Stream complete: ${chunkCount} chunks, ${assistantContent.length} chars`);
-          // Send response to channel
-          await channel.sendMessage({
-            conversationId: message.conversationId,
-            content: assistantContent
-          });
+          const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+          console.log(`[Gateway] Stream complete: ${chunkCount} chunks, ${assistantContent.length} chars, ${elapsed}s`);
+
+          // Send final response to channel
+          if (progressMessageId && channel.updateMessage) {
+            // Update the progress message with final content
+            await channel.updateMessage(progressMessageId, assistantContent);
+          } else {
+            // Send as new message if updates not supported
+            await channel.sendMessage({
+              conversationId: message.conversationId,
+              content: assistantContent
+            });
+          }
           console.log('[Gateway] Message sent to channel');
 
           // Add assistant message to session
@@ -275,6 +323,18 @@ export class Gateway extends EventEmitter {
         conversationId: message.conversationId
       });
     } catch (error) {
+      // Stop progress animation on error
+      if (updateInterval) {
+        clearInterval(updateInterval);
+      }
+
+      // Send error message
+      const channelId = message.metadata?.channelId as string;
+      const channel = this.router.getChannel(channelId);
+      if (channel && progressMessageId && channel.updateMessage) {
+        await channel.updateMessage(progressMessageId, `❌ **Error:** ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+
       console.error('[Gateway] Failed to handle message:', error);
       this.logger.error(`Failed to handle message: ${error}`);
       this.emit('message:error', { message, error });

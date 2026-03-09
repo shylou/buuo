@@ -128,8 +128,9 @@ export class LarkChannel implements Channel {
 
   /**
    * Send message through Lark
+   * Returns message_id for later updates
    */
-  async sendMessage(message: OutgoingMessage): Promise<void> {
+  async sendMessage(message: OutgoingMessage): Promise<string | undefined> {
     if (!this.initialized) {
       throw new Error('Lark channel not initialized');
     }
@@ -170,7 +171,7 @@ export class LarkChannel implements Channel {
 
     try {
       // Send message via Lark API
-      await this.client.im.message.create({
+      const response = await this.client.im.message.create({
         params: {
           receive_id_type: sendOptions.receiveIdType,
         },
@@ -180,10 +181,58 @@ export class LarkChannel implements Channel {
           content: JSON.stringify(sendOptions.content),
         },
       });
+      // Return message_id for potential updates (access via data property)
+      return (response as any)?.data?.message_id || (response as any)?.message_id;
     } catch (error) {
       console.error('Failed to send Lark message:', error);
       throw error;
     }
+  }
+
+  /**
+   * Update an existing message (for progress feedback)
+   */
+  async updateMessage(messageId: string, content: string): Promise<void> {
+    if (!this.initialized) {
+      throw new Error('Lark channel not initialized');
+    }
+
+    const msgContent: LarkMessageContent = {
+      schema: '2.0',
+      body: {
+        elements: [
+          {
+            tag: 'markdown',
+            content: content,
+          },
+        ],
+      },
+    };
+
+    try {
+      await this.client.im.message.patch({
+        path: {
+          message_id: messageId,
+        },
+        data: {
+          content: JSON.stringify(msgContent),
+        },
+      });
+    } catch (error) {
+      console.error('Failed to update Lark message:', error);
+      // Non-fatal: don't throw on update failures
+    }
+  }
+
+  /**
+   * Send a "thinking" indicator immediately
+   */
+  async sendThinkingIndicator(conversationId: string): Promise<string | undefined> {
+    const thinkingContent = '🤔 **Thinking...**\n\n_Please wait while I process your request._';
+    return this.sendMessage({
+      conversationId,
+      content: thinkingContent,
+    });
   }
 
   /**

@@ -126,5 +126,5 @@ export abstract class BaseChannel extends EventEmitter implements Channel {
   protected abstract doInitialize(): Promise<void>;
   protected abstract doStart(): Promise<void>;
   protected abstract doStop(): Promise<void>;
-  public abstract sendMessage(message: OutgoingMessage): Promise<void>;
+  public abstract sendMessage(message: OutgoingMessage): Promise<string | undefined>;
 }
