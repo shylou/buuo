@@ -1,0 +1,53 @@
+# Buuo Configuration
+# This is the default configuration file for Buuo
+
+gateway:
+  id: gateway_${GATEWAY_ID}
+  cleanupInterval: 300000  # 5 minutes
+
+# Session management
+session:
+  maxHistory: 100
+  timeout: 3600000  # 1 hour
+  autoDelete: false
+
+# Router configuration
+router:
+  defaultProvider: claude
+  systemPrompt: |
+    You are a helpful AI assistant.
+  temperature: 0.7
+  maxTokens: 4096
+  stream: true
+
+# Channel configurations
+channels:
+  telegram:
+    - id: telegram-main
+      token: ${TELEGRAM_BOT_TOKEN}
+      enabled: true
+
+  discord:
+    - id: discord-main
+      token: ${DISCORD_BOT_TOKEN}
+      enabled: true
+
+# AI Provider configurations
+providers:
+  claude:
+    - id: claude-default
+      apiKey: ${ANTHROPIC_API_KEY}
+      model: claude-3-5-sonnet-20241022
+      enabled: true
+
+  openai:
+    - id: openai-default
+      apiKey: ${OPENAI_API_KEY}
+      model: gpt-4
+      enabled: false
+
+# Security settings
+security:
+  pairingTTL: 300000  # 5 minutes
+  sessionTTL: 86400000  # 24 hours
+  adminUsers: []

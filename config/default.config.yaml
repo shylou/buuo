@@ -1,0 +1,34 @@
+# Buuo Gateway Configuration
+# Simplified configuration for Claude Code + Lark integration
+
+gateway:
+  id: main_gateway
+  cleanupInterval: 300000  # 5 minutes
+
+session:
+  maxHistory: 50           # Maximum messages per session
+  timeout: 3600000         # 1 hour session timeout
+
+router:
+  defaultProvider: claude-code-local
+  systemPrompt: |
+    You are a helpful AI assistant answering questions in Chinese.
+  maxTokens: 4096
+
+# Lark/Feishu Channel Configuration
+channels:
+  lark-channel:
+    - token: ${LARK_APP_ID}
+      enabled: true
+      options:
+        appSecret: ${LARK_APP_SECRET}
+
+# Claude Code Provider Configuration
+providers:
+  claude-code-provider:
+    - id: claude-code-local
+      enabled: true
+      workingDirectory: /root/opendev/buuo
+      enableTools: true           # Enable tool access
+      sessionTimeout: 3600000     # 1 hour
+      requestTimeout: 300000      # 5 minutes

@@ -1,0 +1,60 @@
+{
+  "name": "@buuo/core",
+  "version": "0.1.0",
+  "description": "Buuo core package with gateway, channels, and providers",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./gateway": {
+      "types": "./dist/gateway/index.d.ts",
+      "default": "./dist/gateway/index.js"
+    },
+    "./channels": {
+      "types": "./dist/channels/index.d.ts",
+      "default": "./dist/channels/index.js"
+    },
+    "./providers": {
+      "types": "./dist/providers/index.d.ts",
+      "default": "./dist/providers/index.js"
+    },
+    "./plugins": {
+      "types": "./dist/plugins/index.d.ts",
+      "default": "./dist/plugins/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "test:coverage": "vitest --coverage"
+  },
+  "keywords": [
+    "ai",
+    "gateway",
+    "channels",
+    "providers"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "eventemitter3": "^5.0.1",
+    "pino": "^9.0.0",
+    "yaml": "^2.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^2.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.0.0"
+  }
+}

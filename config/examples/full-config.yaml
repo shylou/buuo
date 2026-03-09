@@ -1,0 +1,39 @@
+# Full configuration example - multi-provider
+# Support for Claude Code and Lark
+
+gateway:
+  id: main_gateway
+  cleanupInterval: 300000
+
+session:
+  maxHistory: 100
+  timeout: 3600000
+  autoDelete: false
+
+router:
+  defaultProvider: claude-code-local
+  systemPrompt: |
+    You are a versatile AI assistant that can answer various questions.
+  temperature: 0.7
+  maxTokens: 4096
+  stream: true
+
+# All channels
+channels:
+  # Lark/Feishu (Recommended for China users)
+  lark-channel:
+    - id: lark-main
+      token: ${LARK_APP_ID}
+      enabled: true
+      options:
+        appSecret: ${LARK_APP_SECRET}
+
+# Multiple AI providers
+providers:
+  claude-code-local:
+    - id: claude-code-default
+      enabled: true
+      workingDirectory: /root/opendev/buuo
+      enableTools: true
+      sessionTimeout: 3600000
+      requestTimeout: 300000
