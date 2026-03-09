@@ -37,8 +37,11 @@ export interface Channel {
   /**
    * Update an existing message (optional, for progress feedback)
    * Not all channels support this feature
+   * @param messageId - ID of the message to update
+   * @param content - New content for the message
+   * @param conversationId - Optional conversation ID for sending additional parts if content is too long
    */
-  updateMessage?(messageId: string, content: string): Promise<void>;
+  updateMessage?(messageId: string, content: string, conversationId?: string): Promise<void>;
 
   /**
    * Subscribe to incoming message events

@@ -103,8 +103,28 @@ export interface ChatResponse {
   /** Is response complete */
   done: boolean;
 
+  /** Thinking process (for displaying AI reasoning) */
+  thinking?: ThinkingEvent;
+
   /** Response metadata */
   metadata?: Record<string, unknown>;
+}
+
+/**
+ * Thinking process event from AI provider
+ */
+export interface ThinkingEvent {
+  /** Event type */
+  type: 'tool_use' | 'thinking' | 'tool_result';
+
+  /** Tool name (for tool_use events) */
+  name?: string;
+
+  /** Content (for thinking events) */
+  content?: string;
+
+  /** Input (for tool_use events) */
+  input?: string;
 }
 
 export interface TokenUsage {

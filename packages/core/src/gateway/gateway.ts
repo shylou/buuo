@@ -214,7 +214,10 @@ export class Gateway extends EventEmitter {
    */
   async handleMessage(message: IncomingMessage): Promise<void> {
     let progressMessageId: string | undefined = undefined;
-    let updateInterval: NodeJS.Timeout | undefined = undefined;
+    let lastUpdateTime = Date.now();
+    const thinkingEvents: string[] = [];
+    let firstThinkingUpdate = false;
+    let immediateUpdateTimer: NodeJS.Timeout | undefined = undefined;
 
     try {
       console.log('[Gateway] handleMessage called:', message.id);
@@ -231,7 +234,7 @@ export class Gateway extends EventEmitter {
         content: message.content
       });
 
-      // Get channel from metadata (message comes from a specific channel)
+      // Get channel from metadata
       const channelId = message.metadata?.channelId as string;
       const channel = this.router.getChannel(channelId);
       if (!channel) {
@@ -239,76 +242,88 @@ export class Gateway extends EventEmitter {
       }
 
       // Send immediate "thinking" indicator if channel supports updates
-      if (typeof channel.updateMessage === 'function') {
+      if (channel.updateMessage) {
         progressMessageId = await channel.sendMessage({
           conversationId: message.conversationId,
-          content: '🤔 **Thinking...**\n\n_Please wait while I process your request._'
+          content: '🤔 **Thinking...**'
         });
+
+        // Immediate update timer (500ms)
+        immediateUpdateTimer = setTimeout(() => {
+          if (!firstThinkingUpdate && progressMessageId && channel.updateMessage) {
+            channel.updateMessage(progressMessageId, '🤔 **Thinking...**\n\n Processing...')
+              .catch(() => {}); // Silently ignore errors
+          }
+        }, 500);
       }
 
       // Route to provider
       console.log('[Gateway] Routing to provider...');
       const startTime = Date.now();
 
-      // Start a progress update animation
-      if (progressMessageId && channel.updateMessage) {
-        const dots = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-        let dotIndex = 0;
-        updateInterval = setInterval(() => {
-          channel.updateMessage!(progressMessageId!, `🤔 **Thinking...** ${dots[dotIndex % dots.length]}\n\n_Please wait while I process your request._`);
-          dotIndex++;
-        }, 500);
-      }
-
       const responses = await this.router.route(session, message);
       console.log('[Gateway] Got response stream');
 
-      // Collect response and send to channel
+      // Collect response
       let assistantContent = '';
-
-      console.log('[Gateway] Processing response stream...');
       let chunkCount = 0;
-      for await (const response of responses) {
-        if (response.content) {
-          assistantContent += response.content;
-          chunkCount++;
 
-          // Update progress with partial content every 10 chunks
-          if (progressMessageId && channel.updateMessage && chunkCount % 10 === 0) {
-            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-            const preview = assistantContent.slice(0, 200) + (assistantContent.length > 200 ? '...' : '');
-            channel.updateMessage(progressMessageId, `🤔 **Thinking...** (${elapsed}s)\n\n${preview}`);
+      for await (const response of responses) {
+        // Handle thinking events - IMMEDIATE update on first one
+        if (response.thinking) {
+          if (immediateUpdateTimer) {
+            clearTimeout(immediateUpdateTimer);
+            immediateUpdateTimer = undefined;
           }
 
-          // Show progress every 20 chunks
-          if (chunkCount % 20 === 0) {
-            process.stdout.write('.');
+          const thinkingText = this.formatThinkingEvent(response.thinking);
+          thinkingEvents.push(thinkingText);
+
+          // Update IMMEDIATELY on first thinking event
+          if (progressMessageId && channel.updateMessage && !firstThinkingUpdate) {
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+            channel.updateMessage(progressMessageId, this.buildThinkingDisplay(elapsed, thinkingEvents))
+              .catch(() => {}); // Silently ignore errors
+            lastUpdateTime = Date.now();
+            firstThinkingUpdate = true;
+          } else if (progressMessageId && channel.updateMessage) {
+            // Subsequent updates every 1.5 seconds
+            const now = Date.now();
+            if ((now - lastUpdateTime) > 1500) {
+              const elapsed = ((now - startTime) / 1000).toFixed(1);
+              channel.updateMessage(progressMessageId, this.buildThinkingDisplay(elapsed, thinkingEvents))
+                .catch(() => {}); // Silently ignore errors
+              lastUpdateTime = now;
+            }
           }
         }
 
+        // Handle content
+        if (response.content) {
+          assistantContent += response.content;
+          chunkCount++;
+        }
+
         if (response.done) {
-          // Stop progress animation
-          if (updateInterval) {
-            clearInterval(updateInterval);
-            updateInterval = undefined;
+          // Clear timers
+          if (immediateUpdateTimer) {
+            clearTimeout(immediateUpdateTimer);
+            immediateUpdateTimer = undefined;
           }
 
-          if (chunkCount > 0) process.stdout.write('\n');
           const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-          console.log(`[Gateway] Stream complete: ${chunkCount} chunks, ${assistantContent.length} chars, ${elapsed}s`);
+          console.log(`[Gateway] Complete: ${chunkCount} chunks, ${assistantContent.length} chars, ${elapsed}s`);
 
-          // Send final response to channel
+          // Send final response
           if (progressMessageId && channel.updateMessage) {
-            // Update the progress message with final content
-            await channel.updateMessage(progressMessageId, assistantContent);
+            channel.updateMessage(progressMessageId, assistantContent, message.conversationId)
+              .catch(() => {}); // Silently ignore errors
           } else {
-            // Send as new message if updates not supported
             await channel.sendMessage({
               conversationId: message.conversationId,
               content: assistantContent
             });
           }
-          console.log('[Gateway] Message sent to channel');
 
           // Add assistant message to session
           this.sessions.addMessage(session.id, {
@@ -323,16 +338,18 @@ export class Gateway extends EventEmitter {
         conversationId: message.conversationId
       });
     } catch (error) {
-      // Stop progress animation on error
-      if (updateInterval) {
-        clearInterval(updateInterval);
+      // Clear timers
+      if (immediateUpdateTimer) {
+        clearTimeout(immediateUpdateTimer);
+        immediateUpdateTimer = undefined;
       }
 
       // Send error message
       const channelId = message.metadata?.channelId as string;
       const channel = this.router.getChannel(channelId);
       if (channel && progressMessageId && channel.updateMessage) {
-        await channel.updateMessage(progressMessageId, `❌ **Error:** ${error instanceof Error ? error.message : 'Unknown error'}`);
+        channel.updateMessage(progressMessageId, `❌ **Error:** ${error instanceof Error ? error.message : 'Unknown error'}`)
+          .catch(() => {});
       }
 
       console.error('[Gateway] Failed to handle message:', error);
@@ -340,6 +357,37 @@ export class Gateway extends EventEmitter {
       this.emit('message:error', { message, error });
       throw error;
     }
+  }
+
+  /**
+   * Format thinking event for display (compact)
+   */
+  private formatThinkingEvent(thinking: { type: string; name?: string; content?: string; input?: string }): string {
+    switch (thinking.type) {
+      case 'tool_use':
+        if (thinking.input && thinking.input.length > 60) {
+          return `🔧 ${thinking.name}`;
+        }
+        return `🔧 ${thinking.name} ${thinking.input || ''}`;
+      case 'thinking':
+        const content = thinking.content || '...';
+        return `💭 ${content.substring(0, 60)}`;
+      default:
+        return `⚡ ${thinking.type}`;
+    }
+  }
+
+  /**
+   * Build thinking display (compact format)
+   */
+  private buildThinkingDisplay(elapsed: string, events: string[]): string {
+    const lines = [`🤔 **Thinking...** (${elapsed}s)`];
+
+    // Add last 3 unique events
+    const uniqueEvents = [...new Set(events)];
+    lines.push(...uniqueEvents.slice(-3));
+
+    return lines.join('\n');
   }
 
   /**

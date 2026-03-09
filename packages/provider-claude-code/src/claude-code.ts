@@ -285,6 +285,27 @@ export class ClaudeCodeProvider extends BaseProvider {
             for (const item of message.message.content) {
               if (item.type === 'text' && item.text) {
                 enqueue({ content: item.text, done: false });
+              } else if (item.type === 'tool_use') {
+                // Capture tool use for thinking process display
+                enqueue({
+                  done: false,
+                  thinking: {
+                    type: 'tool_use',
+                    name: item.name || 'tool',
+                    input: this.formatToolInput(item.input)
+                  }
+                });
+              } else if (item.type === 'thinking') {
+                // Capture thinking blocks - compact format
+                const thinkingText = item.thinking || '';
+                const truncated = thinkingText.length > 200 ? thinkingText.substring(0, 200) + '...' : thinkingText;
+                enqueue({
+                  done: false,
+                  thinking: {
+                    type: 'thinking',
+                    content: truncated
+                  }
+                });
               }
             }
           }
@@ -328,6 +349,39 @@ export class ClaudeCodeProvider extends BaseProvider {
     } catch (e) {
       // Ignore JSON parse errors for non-JSON lines
     }
+  }
+
+  /**
+   * Format tool input for display
+   */
+  private formatToolInput(input: any): string {
+    if (!input) return '';
+
+    if (typeof input === 'string') {
+      return input.length > 100 ? input.substring(0, 100) + '...' : input;
+    }
+
+    // Smart format for common types
+    if (input.file) {
+      const file = input.file as string;
+      return file.length > 60 ? `📄 ${file.substring(0, 30)}...` : `📄 ${file}`;
+    }
+    if (input.query) {
+      const query = input.query as string;
+      return `🔍 "${query.substring(0, 40)}..."`;
+    }
+    if (input.path) {
+      const path = input.path as string;
+      if (path.length > 60) {
+        const parts = path.split('/');
+        return `📁 ...${parts.slice(-2).join('/')}`;
+      }
+      return `📁 ${path}`;
+    }
+
+    // Default: compact object representation
+    const keys = Object.keys(input).slice(0, 2);
+    return keys.length > 2 ? `{${keys.join(', ')}, ...}` : JSON.stringify(input).substring(0, 80);
   }
 
   private generateSessionId(): string {

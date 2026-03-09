@@ -137,6 +137,37 @@ export class LarkChannel implements Channel {
 
     const { conversationId, content, options } = message;
 
+    // Check if content needs to be split due to table limit
+    const parts = this.splitContentIfNeeded(content);
+
+    // If split into multiple parts, send them all
+    if (parts.length > 1) {
+      console.log(`[Lark] Splitting content into ${parts.length} parts`);
+      let lastMessageId: string | undefined;
+
+      for (let i = 0; i < parts.length; i++) {
+        const partContent = parts[i];
+        const partIndicator = parts.length > 1 ? `\n\n_${i + 1}/${parts.length}_` : '';
+
+        lastMessageId = await this.sendMessageInternal(conversationId, partContent + partIndicator);
+
+        // Add delay between parts to avoid rate limiting (1 second)
+        if (i < parts.length - 1) {
+          await this.sleep(1000);
+        }
+      }
+
+      return lastMessageId;
+    }
+
+    // Send single message
+    return this.sendMessageInternal(conversationId, content);
+  }
+
+  /**
+   * Internal method to send a single message
+   */
+  private async sendMessageInternal(conversationId: string, content: string): Promise<string | undefined> {
     // Parse conversationId to get receive_id and receive_id_type
     // Format: "receive_id|receive_id_type" or just "receive_id" (default to chat_id)
     let receiveId: string;
@@ -190,13 +221,159 @@ export class LarkChannel implements Channel {
   }
 
   /**
-   * Update an existing message (for progress feedback)
+   * Split content if it exceeds Feishu limits
+   * Feishu limits: ~10 tables per card, ~15000 chars per message
    */
-  async updateMessage(messageId: string, content: string): Promise<void> {
+  private splitContentIfNeeded(content: string): string[] {
+    const TABLE_LIMIT = 8; // Conservative limit (Feishu allows ~10)
+    const CHAR_LIMIT = 12000; // Conservative character limit
+
+    const tableCount = this.countMarkdownTables(content);
+    const isTooLong = content.length > CHAR_LIMIT || tableCount > TABLE_LIMIT;
+
+    if (!isTooLong) {
+      return [content];
+    }
+
+    console.log(`[Lark] Content too long: ${content.length} chars, ${tableCount} tables`);
+    return this.smartSplitContent(content, TABLE_LIMIT, CHAR_LIMIT);
+  }
+
+  /**
+   * Count markdown tables in content
+   */
+  private countMarkdownTables(content: string): number {
+    // Match markdown tables: lines starting with | and containing ||
+    const lines = content.split('\n');
+    let tableCount = 0;
+    let inTable = false;
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      // Table row: starts with | and has at least one more |
+      if (trimmed.startsWith('|') && trimmed.includes('|', 1)) {
+        if (!inTable) {
+          tableCount++;
+          inTable = true;
+        }
+      } else if (inTable && trimmed === '') {
+        // Empty line ends table
+        inTable = false;
+      } else if (!trimmed.startsWith('|')) {
+        inTable = false;
+      }
+    }
+
+    return tableCount;
+  }
+
+  /**
+   * Smart content splitting at logical boundaries
+   */
+  private smartSplitContent(content: string, tableLimit: number, charLimit: number): string[] {
+    const parts: string[] = [];
+    const lines = content.split('\n');
+    let currentPart: string[] = [];
+    let currentTables = 0;
+    let currentChars = 0;
+    let inTable = false;
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      const isTableRow = trimmed.startsWith('|') && trimmed.includes('|', 1);
+      const isEmpty = trimmed === '';
+
+      // Check if this line starts/ends a table
+      if (isTableRow && !inTable) {
+        // Starting a new table
+        if (currentTables >= tableLimit || currentChars + line.length > charLimit) {
+          // Current part is full, save it
+          parts.push(currentPart.join('\n'));
+          currentPart = [];
+          currentTables = 0;
+          currentChars = 0;
+        }
+        currentTables++;
+        inTable = true;
+      } else if (!isTableRow && !isEmpty && inTable) {
+        inTable = false;
+      } else if (isEmpty) {
+        inTable = false;
+      }
+
+      // Add line to current part
+      currentPart.push(line);
+      currentChars += line.length + 1; // +1 for newline
+
+      // Check if we need to split (but not in the middle of a table)
+      if (!inTable && currentChars > charLimit * 0.9) {
+        // Find a good split point (empty line or heading)
+        if (isEmpty || trimmed.startsWith('#')) {
+          parts.push(currentPart.join('\n'));
+          currentPart = [];
+          currentTables = 0;
+          currentChars = 0;
+        }
+      }
+    }
+
+    // Add remaining content
+    if (currentPart.length > 0) {
+      parts.push(currentPart.join('\n'));
+    }
+
+    return parts.filter(p => p.trim().length > 0);
+  }
+
+  /**
+   * Sleep utility for delays
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Update an existing message (for progress feedback)
+   * If content is too long, truncate and send remaining as new messages
+   */
+  async updateMessage(messageId: string, content: string, conversationId?: string): Promise<void> {
     if (!this.initialized) {
       throw new Error('Lark channel not initialized');
     }
 
+    // Check if content needs truncation for update
+    const UPDATE_CHAR_LIMIT = 10000; // Conservative limit for updates
+    const needsSplit = content.length > UPDATE_CHAR_LIMIT || this.countMarkdownTables(content) > 5;
+
+    if (needsSplit && conversationId) {
+      // Content too long for update - truncate and send rest as new messages
+      const parts = this.smartSplitContent(content, 5, UPDATE_CHAR_LIMIT);
+
+      // Update with first part (truncated)
+      await this.updateMessageInternal(messageId, parts[0]);
+
+      // Send remaining parts as new messages
+      if (parts.length > 1) {
+        console.log(`[Lark] Update truncated, sending ${parts.length - 1} additional parts`);
+        for (let i = 1; i < parts.length; i++) {
+          await this.sleep(800); // Longer delay to avoid rate limiting
+          await this.sendMessageInternal(conversationId, parts[i] + `\n\n_${i + 1}/${parts.length}_`);
+        }
+      }
+    } else {
+      // Short content, update directly (truncate if still too long)
+      const truncatedContent = content.length > UPDATE_CHAR_LIMIT
+        ? content.slice(0, UPDATE_CHAR_LIMIT) + '\n\n_(Content truncated, full response sent separately)_'
+        : content;
+
+      await this.updateMessageInternal(messageId, truncatedContent);
+    }
+  }
+
+  /**
+   * Internal method to update a message
+   */
+  private async updateMessageInternal(messageId: string, content: string): Promise<void> {
     const msgContent: LarkMessageContent = {
       schema: '2.0',
       body: {
