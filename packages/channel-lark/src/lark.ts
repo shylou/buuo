@@ -2,6 +2,10 @@
  * Lark/Feishu Channel Implementation (WebSocket Mode)
  */
 
+import https from 'node:https';
+import { writeFile, mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type * as LarkSDK from '@larksuiteoapi/node-sdk';
 import type {
   Channel,
@@ -9,10 +13,10 @@ import type {
   IncomingMessage,
   OutgoingMessage,
   ChannelStatus,
+  Attachment,
 } from '@buuo/core';
 import type {
   LarkConfig,
-  LarkEvent,
   LarkMessageContent,
   LarkSendMessageOptions,
 } from './types.js';
@@ -32,12 +36,33 @@ export class LarkChannel implements Channel {
   private wsClient?: any; // Lark.WSClient
   private initialized = false;
   private messageHandlers: Array<(message: IncomingMessage) => void | Promise<void>> = [];
-  private heartbeatTimer?: NodeJS.Timeout;
+  private _heartbeatTimer?: NodeJS.Timeout;
+  private tenantAccessToken?: string;
+  private tokenExpireTime?: number;
+  private imageCacheDir: string;
+  private processedMessageIds = new Set<string>(); // Message deduplication
 
   constructor(options: { id?: string } = {}) {
     this.id = options.id || 'lark-channel';
     this.name = 'Lark/Feishu Channel';
+    this.imageCacheDir = join(tmpdir(), 'buuo-lark-images');
   }
+
+  // Unified logging function with millisecond timestamps
+  private log = (...args: unknown[]) => {
+    const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 23);
+    console.log(`[${timestamp}]`, ...args);
+  };
+
+  private logError = (...args: unknown[]) => {
+    const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 23);
+    console.error(`[${timestamp}]`, ...args);
+  };
+
+  private logWarn = (...args: unknown[]) => {
+    const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 23);
+    console.warn(`[${timestamp}]`, ...args);
+  };
 
   /**
    * Initialize the Lark channel
@@ -97,7 +122,7 @@ export class LarkChannel implements Channel {
     // Start WebSocket connection
     await this.wsClient.start({ eventDispatcher });
 
-    console.log(`✓ Lark WebSocket connected (App: ${this.config.appId})`);
+    this.log(`✓ Lark WebSocket connected (App: ${this.config.appId})`);
 
     // Start lightweight heartbeat monitoring
     this.startHeartbeat();
@@ -107,13 +132,12 @@ export class LarkChannel implements Channel {
    * Start lightweight heartbeat monitoring (logs only on issues)
    */
   private startHeartbeat(): void {
-    // Minimal heartbeat: only check connection status every 5 minutes
-    this.heartbeatTimer = setInterval(() => {
+    this._heartbeatTimer = setInterval(() => {
       const connected = this.initialized && !!this.wsClient;
       if (!connected) {
-        console.warn(`[Lark] Connection lost, attempting to reconnect...`);
+        this.logWarn('[Lark] Connection lost');
       }
-    }, 300000); // 5 minutes instead of 30 seconds
+    }, 300000);
   }
 
   /**
@@ -135,14 +159,14 @@ export class LarkChannel implements Channel {
       throw new Error('Lark channel not initialized');
     }
 
-    const { conversationId, content, options } = message;
+    const { conversationId, content } = message;
 
     // Check if content needs to be split due to table limit
     const parts = this.splitContentIfNeeded(content);
 
     // If split into multiple parts, send them all
     if (parts.length > 1) {
-      console.log(`[Lark] Splitting content into ${parts.length} parts`);
+      this.log(`[Lark] Splitting content into ${parts.length} parts`);
       let lastMessageId: string | undefined;
 
       for (let i = 0; i < parts.length; i++) {
@@ -215,7 +239,7 @@ export class LarkChannel implements Channel {
       // Return message_id for potential updates (access via data property)
       return (response as any)?.data?.message_id || (response as any)?.message_id;
     } catch (error) {
-      console.error('Failed to send Lark message:', error);
+      this.logError('Failed to send Lark message:', error);
       throw error;
     }
   }
@@ -235,7 +259,7 @@ export class LarkChannel implements Channel {
       return [content];
     }
 
-    console.log(`[Lark] Content too long: ${content.length} chars, ${tableCount} tables`);
+    this.log(`[Lark] Content too long: ${content.length} chars, ${tableCount} tables`);
     return this.smartSplitContent(content, TABLE_LIMIT, CHAR_LIMIT);
   }
 
@@ -354,7 +378,7 @@ export class LarkChannel implements Channel {
 
       // Send remaining parts as new messages
       if (parts.length > 1) {
-        console.log(`[Lark] Update truncated, sending ${parts.length - 1} additional parts`);
+        this.log(`[Lark] Update truncated, sending ${parts.length - 1} additional parts`);
         for (let i = 1; i < parts.length; i++) {
           await this.sleep(800); // Longer delay to avoid rate limiting
           await this.sendMessageInternal(conversationId, parts[i] + `\n\n_${i + 1}/${parts.length}_`);
@@ -396,20 +420,9 @@ export class LarkChannel implements Channel {
         },
       });
     } catch (error) {
-      console.error('Failed to update Lark message:', error);
+      this.logError('Failed to update Lark message:', error);
       // Non-fatal: don't throw on update failures
     }
-  }
-
-  /**
-   * Send a "thinking" indicator immediately
-   */
-  async sendThinkingIndicator(conversationId: string): Promise<string | undefined> {
-    const thinkingContent = '🤔 **Thinking...**\n\n_Please wait while I process your request._';
-    return this.sendMessage({
-      conversationId,
-      content: thinkingContent,
-    });
   }
 
   /**
@@ -446,18 +459,54 @@ export class LarkChannel implements Channel {
   /**
    * Handle message event from Lark (optimized)
    */
-  private handleMessageEvent(data: any): void {
+  private async handleMessageEvent(data: any): Promise<void> {
     if (!data || !data.message) {
       return;
     }
 
     const { sender, message } = data;
 
-    // Parse message content efficiently
+    // Message deduplication - skip already processed messages
+    const messageId = message.message_id;
+    if (!messageId || this.processedMessageIds.has(messageId)) {
+      return; // Skip duplicate or invalid messages
+    }
+    this.processedMessageIds.add(messageId);
+
+    // Clean up old message IDs (keep last 1000)
+    if (this.processedMessageIds.size > 1000) {
+      const firstId = this.processedMessageIds.values().next().value;
+      if (firstId) {
+        this.processedMessageIds.delete(firstId);
+      }
+    }
+
+    // Parse message content and extract attachments
     let content = '';
+    let attachments: Attachment[] = [];
+
     try {
       const messageContent = JSON.parse(message.content);
-      content = messageContent.text || messageContent.content || '';
+
+      // Handle different message types
+      if (message.message_type === 'image') {
+        // Image message: create attachment with clear instruction
+        const imageKey = messageContent.image_key;
+        if (imageKey) {
+          const attachment = await this.downloadAndAttachImage(message.message_id, imageKey);
+          if (attachment) {
+            // Use neutral text that won't trigger image analysis
+            content = '[图片]';
+            attachments.push(attachment);
+          } else {
+            // Image download failed - add note to content
+            content = '[图片加载失败]';
+          }
+        }
+      } else {
+        // Text or other message types
+        content = messageContent.text || messageContent.content || '';
+      }
     } catch {
       content = message.content || '';
     }
@@ -468,6 +517,7 @@ export class LarkChannel implements Channel {
       userId: sender?.sender_id?.open_id || '',
       conversationId: message.chat_id,
       content,
+      attachments: attachments.length > 0 ? attachments : undefined,
       timestamp: new Date(message.create_time || Date.now()),
       metadata: {
         chatType: message.chat_type,
@@ -484,10 +534,140 @@ export class LarkChannel implements Channel {
           try {
             await handler(incomingMessage);
           } catch (error) {
-            console.error('[Lark] Handler error:', error);
+            this.logError('[Lark] Handler error:', error);
           }
         })
-      ).catch(err => console.error('[Lark] Handler batch error:', err));
+      ).catch(err => this.logError('[Lark] Handler batch error:', err));
     }
   }
+
+  /**
+   * Download image from Lark and return as attachment
+   * Uses message resource API for user-sent images
+   * Reference: https://open.feishu.cn/document/server-docs/im-v1/message-resource-get
+   */
+  private async downloadAndAttachImage(
+    messageId: string,
+    imageKey: string
+  ): Promise<Attachment | null> {
+    try {
+      // Get tenant access token
+      const token = await this.getTenantAccessToken();
+
+      // Create image cache directory
+      await mkdir(this.imageCacheDir, { recursive: true });
+
+      // Generate unique filename
+      const filename = `lark_${imageKey}_${Date.now()}.jpg`;
+      const filePath = join(this.imageCacheDir, filename);
+
+      // Download image using message resource API
+      await this.downloadImageViaMessageResource(messageId, imageKey, filePath, token);
+
+      // Return attachment with local file path
+      return {
+        type: 'image',
+        url: filePath,
+        mimeType: 'image/jpeg',
+        metadata: { imageKey, messageId, platform: 'lark' },
+      };
+    } catch (error) {
+      this.logError(`[Lark] Image download failed: ${error}`);
+      // Return attachment with error metadata
+      return {
+        type: 'image',
+        url: '',
+        mimeType: 'image/jpeg',
+        metadata: { imageKey, messageId, platform: 'lark', error: String(error) },
+      };
+    }
+  }
+
+  /**
+   * Download image using message resource API
+   * API: GET /open-apis/im/v1/messages/{message_id}/resources/{file_key}?type=image
+   */
+  private async downloadImageViaMessageResource(
+    messageId: string,
+    fileKey: string,
+    filePath: string,
+    token: string
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const options = {
+        hostname: 'open.feishu.cn',
+        path: `/open-apis/im/v1/messages/${messageId}/resources/${fileKey}?type=image`,
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${token}` },
+      };
+
+      this.log(`[Lark] Downloading image: msg=${messageId}, key=${fileKey}`);
+
+      const req = https.request(options, (res) => {
+        if (res.statusCode === 200) {
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk) => { chunks.push(chunk); });
+          res.on('end', () => {
+            const buffer = Buffer.concat(chunks);
+            this.log(`[Lark] ✓ Downloaded ${buffer.length} bytes`);
+            writeFile(filePath, buffer).then(() => resolve()).catch(reject);
+          });
+        } else {
+          let errorData = '';
+          res.on('data', (chunk) => { errorData += chunk; });
+          res.on('end', () => {
+            this.logError(`[Lark] ✗ Download failed ${res.statusCode}: ${errorData.substring(0, 200)}`);
+            reject(new Error(`HTTP ${res.statusCode}`));
+          });
+        }
+      });
+
+      req.on('error', (err) => {
+        this.logError('[Lark] Request error:', err);
+        reject(err);
+      });
+
+      req.setTimeout(30000, () => {
+        req.destroy();
+        reject(new Error('Download timeout'));
+      });
+
+      req.end();
+    });
+  }
+
+  /**
+   * Get tenant access token for API authentication
+   */
+  private async getTenantAccessToken(): Promise<string> {
+    // Check if cached token is still valid
+    if (this.tenantAccessToken && this.tokenExpireTime && Date.now() < this.tokenExpireTime) {
+      return this.tenantAccessToken;
+    }
+
+    // Get new token from Lark API
+    try {
+      const response = await this.client.auth.v3.tenantAccessToken.internal({
+        data: {
+          app_id: this.config.appId,
+          app_secret: this.config.appSecret,
+        },
+      }) as any;
+
+      if (response.code === 0 && response.tenant_access_token) {
+        const token = response.tenant_access_token;
+        this.tenantAccessToken = token;
+        // Token expires in 2 hours, set expiry 1 hour early for safety
+        this.tokenExpireTime = Date.now() + ((response.expire || 7200) - 3600) * 1000;
+        return token;
+      }
+
+      throw new Error(`Failed to get tenant token: ${response.msg}`);
+    } catch (error) {
+      this.logError('[Lark] Get tenant token error:', error);
+      throw error;
+    }
+  }
+
 }
+

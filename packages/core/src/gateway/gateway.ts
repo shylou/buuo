@@ -79,6 +79,12 @@ export class Gateway extends EventEmitter {
   public readonly sessions: SessionManager;
   public readonly router: MessageRouter;
 
+  // Unified logging function with millisecond timestamps
+  private log = (...args: unknown[]) => {
+    const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 23);
+    console.log(`[${timestamp}]`, ...args);
+  };
+
   constructor(
     private readonly config: GatewayConfig = {},
     public readonly plugins: PluginManager,
@@ -218,19 +224,13 @@ export class Gateway extends EventEmitter {
     let immediateUpdateTimer: NodeJS.Timeout | undefined = undefined;
 
     try {
-      console.log('[Gateway] handleMessage called:', message.id);
-      console.log('[Gateway] User message:', message.content);
+      this.log('[Gateway] handleMessage called:', message.id);
+      this.log('[Gateway] User message:', message.content);
       this.emit('message:incoming', message);
 
       // Get or create session
       const session = await this.sessions.getOrCreate(message);
-      console.log('[Gateway] Session:', session.id);
-
-      // Add user message to session
-      this.sessions.addMessage(session.id, {
-        role: 'user',
-        content: message.content
-      });
+      this.log('[Gateway] Session:', session.id);
 
       // Get channel from metadata
       const channelId = message.metadata?.channelId as string;
@@ -240,11 +240,11 @@ export class Gateway extends EventEmitter {
       }
 
       // Route to provider FIRST (to start processing immediately)
-      console.log('[Gateway] Routing to provider...');
+      this.log('[Gateway] Routing to provider...');
       const startTime = Date.now();
 
       const responses = await this.router.route(session, message);
-      console.log('[Gateway] Got response stream');
+      this.log('[Gateway] Got response stream');
 
       // Send "thinking" indicator AFTER getting stream (immediate user feedback)
       if (channel.updateMessage) {
@@ -302,7 +302,7 @@ export class Gateway extends EventEmitter {
           }
 
           const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-          console.log(`[Gateway] Complete: ${chunkCount} chunks, ${assistantContent.length} chars, ${elapsed}s`);
+          this.log(`[Gateway] Complete: ${chunkCount} chunks, ${assistantContent.length} chars, ${elapsed}s`);
 
           // Send final response
           if (progressMessageId && channel.updateMessage) {
@@ -352,7 +352,7 @@ export class Gateway extends EventEmitter {
         }
       }
 
-      console.error('[Gateway] Failed to handle message:', error);
+      this.log('[Gateway] Failed to handle message:', error);
       this.logger.error(`Failed to handle message: ${error}`);
       this.emit('message:error', { message, error });
       throw error;

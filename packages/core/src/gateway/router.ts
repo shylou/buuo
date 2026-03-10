@@ -91,6 +91,15 @@ export class MessageRouter {
       throw new Error(`Provider not found: ${providerId}`);
     }
 
+    // Add user message to session before building request
+    session.messages.push({
+      role: 'user',
+      content: message.content,
+      metadata: {
+        attachments: message.attachments
+      }
+    });
+
     // Build chat request
     const request: ChatRequest = {
       sessionId: session.id,
@@ -99,12 +108,6 @@ export class MessageRouter {
       temperature: session.data.temperature as number ?? this.options.temperature ?? 0.7,
       maxTokens: session.data.maxTokens as number ?? this.options.maxTokens ?? 4096
     };
-
-    // Add user message to session
-    session.messages.push({
-      role: 'user',
-      content: message.content
-    });
 
     // Route to provider
     if (this.options.stream ?? true) {
@@ -130,16 +133,13 @@ export class MessageRouter {
     }
 
     let fullContent = '';
-    let toolCalls: import('../providers/index.js').ToolCall[] | undefined;
 
     for await (const response of responses) {
       if (response.content) {
         fullContent += response.content;
       }
 
-      if (response.toolCalls) {
-        toolCalls = response.toolCalls;
-      }
+      // Note: toolCalls in responses are available but not currently handled
 
       if (response.done) {
         await channel.sendMessage({
