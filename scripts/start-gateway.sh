@@ -14,7 +14,7 @@ NC='\033[0m'
 # Configuration
 BUUO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PID_FILE="$BUUO_DIR/.buuo_gateway.pid"
-LOG_FILE="/tmp/buuo_gateway.log"
+LOG_FILE="/tmp/buuo_service.log"
 CLI="$BUUO_DIR/apps/cli/dist/cli.js"
 
 cd "$BUUO_DIR"

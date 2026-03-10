@@ -37,8 +37,11 @@ gatewayCommand
         // .env file not found, continue without it
       }
 
-      // Initialize logger
-      const logger = await createLogger({ level: 'info' });
+      // Initialize logger with consistent timestamp format
+      const logger = await createLogger({
+        level: 'info',
+        usePino: false  // Use ConsoleLogger for consistent format
+      });
 
       // Load configuration
       const configPath = resolve(options.config);

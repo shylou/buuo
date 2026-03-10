@@ -82,39 +82,50 @@ export class ConsoleLogger implements Logger {
     private readonly context: Record<string, unknown> = {}
   ) {}
 
+  // Unified timestamp function
+  private getTimestamp(): string {
+    return new Date().toISOString().replace('T', ' ').slice(0, 23);
+  }
+
   trace(msg: string, ...args: unknown[]): void {
     if (this.shouldLog('trace')) {
-      console.trace('[TRACE]', this.format(msg), ...args);
+      const ts = this.getTimestamp();
+      console.trace(`[${ts}]`, '[TRACE]', this.format(msg), ...args);
     }
   }
 
   debug(msg: string, ...args: unknown[]): void {
     if (this.shouldLog('debug')) {
-      console.debug('[DEBUG]', this.format(msg), ...args);
+      const ts = this.getTimestamp();
+      console.debug(`[${ts}]`, '[DEBUG]', this.format(msg), ...args);
     }
   }
 
   info(msg: string, ...args: unknown[]): void {
     if (this.shouldLog('info')) {
-      console.info('[INFO]', this.format(msg), ...args);
+      const ts = this.getTimestamp();
+      console.info(`[${ts}]`, '[INFO]', this.format(msg), ...args);
     }
   }
 
   warn(msg: string, ...args: unknown[]): void {
     if (this.shouldLog('warn')) {
-      console.warn('[WARN]', this.format(msg), ...args);
+      const ts = this.getTimestamp();
+      console.warn(`[${ts}]`, '[WARN]', this.format(msg), ...args);
     }
   }
 
   error(msg: string, ...args: unknown[]): void {
     if (this.shouldLog('error')) {
-      console.error('[ERROR]', this.format(msg), ...args);
+      const ts = this.getTimestamp();
+      console.error(`[${ts}]`, '[ERROR]', this.format(msg), ...args);
     }
   }
 
   fatal(msg: string, ...args: unknown[]): void {
     if (this.shouldLog('fatal')) {
-      console.error('[FATAL]', this.format(msg), ...args);
+      const ts = this.getTimestamp();
+      console.error(`[${ts}]`, '[FATAL]', this.format(msg), ...args);
     }
   }
 

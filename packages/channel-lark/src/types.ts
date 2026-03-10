@@ -87,8 +87,23 @@ export interface LarkMessageContent {
   /** Interactive card content */
   card?: LarkCardContent;
 
+  /** Image key (for msg_type='image') */
+  image_key?: string;
+
   /** Additional fields */
   [key: string]: unknown;
+}
+
+/** Lark image resource response */
+export interface LarkImageResource {
+  /** File token for downloading */
+  file_token: string;
+
+  /** File download ticket */
+  ticket: string;
+
+  /** File expiration time */
+  expire_time: number;
 }
 
 export interface LarkPostContent {
