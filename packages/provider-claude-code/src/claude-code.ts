@@ -35,6 +35,8 @@ const POLL_INTERVAL = 50;
 const MAX_LOG_LENGTH = 200;
 const MAX_TOOL_INPUT_LENGTH = 100;
 const MAX_IMAGE_PATH_LENGTH = 60;
+const SESSION_TTL = 24 * 60 * 60 * 1000; // 24 hours
+const SESSION_CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 export class ClaudeCodeProvider extends BaseProvider {
   private cliPath: string;
@@ -45,6 +47,12 @@ export class ClaudeCodeProvider extends BaseProvider {
 
   /** Cache: Buuo session ID -> Claude session ID */
   private readonly claudeSessionIds = new Map<string, string>();
+
+  /** Cache: Buuo session ID -> expiry timestamp */
+  private readonly sessionExpiry = new Map<string, number>();
+
+  /** Cleanup interval timer */
+  private cleanupTimer?: NodeJS.Timeout;
 
   private readonly log = (...args: unknown[]) => {
     const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 23);
@@ -79,7 +87,36 @@ export class ClaudeCodeProvider extends BaseProvider {
       model: 'claude-code',
     };
 
+    // Start periodic session cleanup
+    this.startSessionCleanup();
+
     this.log(`Initialized (timeout: ${this.requestTimeout}ms, tools: ${this.enableTools})`);
+  }
+
+  /** Start periodic cleanup of expired sessions */
+  private startSessionCleanup(): void {
+    this.cleanupTimer = setInterval(() => {
+      this.cleanExpiredSessions();
+    }, SESSION_CLEANUP_INTERVAL);
+    this.logDebug(`Session cleanup started (interval: ${SESSION_CLEANUP_INTERVAL}ms)`);
+  }
+
+  /** Clean up expired sessions */
+  private cleanExpiredSessions(): void {
+    const now = Date.now();
+    let cleanedCount = 0;
+
+    for (const [buuoSessionId, expiry] of this.sessionExpiry) {
+      if (expiry < now) {
+        this.claudeSessionIds.delete(buuoSessionId);
+        this.sessionExpiry.delete(buuoSessionId);
+        cleanedCount++;
+      }
+    }
+
+    if (cleanedCount > 0) {
+      this.log(`Cleaned ${cleanedCount} expired sessions`);
+    }
   }
 
   protected async doChat(request: ChatRequest): Promise<ChatResponse> {
@@ -117,8 +154,12 @@ export class ClaudeCodeProvider extends BaseProvider {
     if (isFirstMessage) {
       claudeSessionId = uuidv4();
       this.claudeSessionIds.set(buuoSessionId, claudeSessionId);
+      // Set expiry time for new session
+      this.sessionExpiry.set(buuoSessionId, Date.now() + SESSION_TTL);
       this.log(`New session: ${buuoSessionId} -> ${claudeSessionId}`);
     } else {
+      // Update expiry time for existing session on activity
+      this.sessionExpiry.set(buuoSessionId, Date.now() + SESSION_TTL);
       this.logDebug(`Resume session: ${buuoSessionId} -> ${claudeSessionId}`);
     }
 
@@ -501,6 +542,7 @@ export class ClaudeCodeProvider extends BaseProvider {
   /** Clear cached session ID (for session reset) */
   clearSession(buuoSessionId: string): void {
     this.claudeSessionIds.delete(buuoSessionId);
+    this.sessionExpiry.delete(buuoSessionId);
     this.log(`Cleared session: ${buuoSessionId}`);
   }
 
@@ -519,7 +561,15 @@ export class ClaudeCodeProvider extends BaseProvider {
   }
 
   async cleanup(): Promise<void> {
+    // Clear cleanup timer
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = undefined;
+    }
+
+    // Clear all caches
     this.claudeSessionIds.clear();
+    this.sessionExpiry.clear();
     this.log('Cleanup complete');
   }
 }

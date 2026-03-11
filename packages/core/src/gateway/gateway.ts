@@ -72,6 +72,9 @@ export class Gateway extends EventEmitter {
   private readonly channelConfigs = new Map<string, object>(); // Store channel configs
   private readonly providerConfigs = new Map<string, object>(); // Store provider configs
 
+  /** Per-conversation locks to prevent concurrent processing */
+  private readonly conversationLocks = new Map<string, Promise<void>>();
+
   public readonly sessions: SessionManager;
   public readonly router: MessageRouter;
 
@@ -198,9 +201,35 @@ export class Gateway extends EventEmitter {
   }
 
   /**
-   * Handle incoming message
+   * Handle incoming message (with per-conversation locking)
    */
   async handleMessage(message: IncomingMessage): Promise<void> {
+    const conversationId = message.conversationId;
+
+    // Wait for any existing processing of this conversation to complete
+    let existingLock = this.conversationLocks.get(conversationId);
+    if (existingLock) {
+      await existingLock;
+    }
+
+    // Create new lock for this message
+    const lockPromise = this.handleMessageInternal(message);
+
+    // Store lock so concurrent messages wait for it
+    this.conversationLocks.set(conversationId, lockPromise);
+
+    try {
+      await lockPromise;
+    } finally {
+      // Clean up lock after processing completes
+      this.conversationLocks.delete(conversationId);
+    }
+  }
+
+  /**
+   * Internal message handling implementation
+   */
+  private async handleMessageInternal(message: IncomingMessage): Promise<void> {
     let progressMessageId: string | undefined = undefined;
     const thinkingEvents: string[] = [];
     let immediateUpdateTimer: NodeJS.Timeout | undefined = undefined;
@@ -256,65 +285,62 @@ export class Gateway extends EventEmitter {
       let assistantContent = '';
       let chunkCount = 0;
 
-      for await (const response of responses) {
-        // Handle thinking events - add to array for display
-        // Validate thinking object has required structure
-        if (response.thinking && typeof response.thinking === 'object' && response.thinking.type) {
-          const thinkingText = this.formatThinkingEvent(response.thinking);
-          thinkingEvents.push(thinkingText);
+      try {
+        for await (const response of responses) {
+          // Handle thinking events - add to array for display
+          // Validate thinking object has required structure
+          if (response.thinking && typeof response.thinking === 'object' && response.thinking.type) {
+            const thinkingText = this.formatThinkingEvent(response.thinking);
+            thinkingEvents.push(thinkingText);
 
-          // Update IMMEDIATELY when thinking event arrives (don't wait for interval)
-          if (progressMessageId && channel.updateMessage) {
-            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-            channel.updateMessage(progressMessageId, this.buildThinkingDisplay(elapsed, thinkingEvents))
-              .catch(() => {}); // Silently ignore errors
+            // Update IMMEDIATELY when thinking event arrives (don't wait for interval)
+            if (progressMessageId && channel.updateMessage) {
+              const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+              channel.updateMessage(progressMessageId, this.buildThinkingDisplay(elapsed, thinkingEvents))
+                .catch(() => {});
+            }
           }
-        }
-        // Handle content
-        if (response.content) {
-          assistantContent += response.content;
-          chunkCount++;
-        }
-
-        if (response.done) {
-          // Clear timers
-          if (immediateUpdateTimer) {
-            clearInterval(immediateUpdateTimer);
-            immediateUpdateTimer = undefined;
+          // Handle content
+          if (response.content) {
+            assistantContent += response.content;
+            chunkCount++;
           }
 
-          const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-          this.log(`[Gateway] Complete: ${chunkCount} chunks, ${assistantContent.length} chars, ${elapsed}s`);
+          if (response.done) {
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+            this.log(`[Gateway] Complete: ${chunkCount} chunks, ${assistantContent.length} chars, ${elapsed}s`);
 
-          // Send final response
-          if (progressMessageId && channel.updateMessage) {
-            channel.updateMessage(progressMessageId, assistantContent, message.conversationId)
-              .catch(() => {}); // Silently ignore errors
-          } else {
-            await channel.sendMessage({
-              conversationId: message.conversationId,
+            // Send final response
+            if (progressMessageId && channel.updateMessage) {
+              channel.updateMessage(progressMessageId, assistantContent, message.conversationId)
+                .catch((err) => this.logger?.warn(`Failed to update final message: ${err}`));
+            } else {
+              await channel.sendMessage({
+                conversationId: message.conversationId,
+                content: assistantContent
+              });
+            }
+
+            // Add assistant message to session
+            this.sessions.addMessage(session.id, {
+              role: 'assistant',
               content: assistantContent
             });
           }
+        }
 
-          // Add assistant message to session
-          this.sessions.addMessage(session.id, {
-            role: 'assistant',
-            content: assistantContent
-          });
+        this.emit('message:handled', {
+          sessionId: session.id,
+          conversationId: message.conversationId
+        });
+      } finally {
+        // Ensure timer is always cleared, regardless of success/failure
+        if (immediateUpdateTimer) {
+          clearInterval(immediateUpdateTimer);
+          immediateUpdateTimer = undefined;
         }
       }
-
-      this.emit('message:handled', {
-        sessionId: session.id,
-        conversationId: message.conversationId
-      });
     } catch (error) {
-      // Clear timers
-      if (immediateUpdateTimer) {
-        clearInterval(immediateUpdateTimer);
-        immediateUpdateTimer = undefined;
-      }
 
       // Send error message to Feishu
       const channelId = message.metadata?.channelId as string;
