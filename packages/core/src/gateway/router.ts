@@ -91,19 +91,19 @@ export class MessageRouter {
       throw new Error(`Provider not found: ${providerId}`);
     }
 
-    // Add user message to session before building request
-    session.messages.push({
-      role: 'user',
+    // Build message with only current content (resume mode - Claude Code manages history)
+    const messages = [{
+      role: 'user' as const,
       content: message.content,
       metadata: {
         attachments: message.attachments
       }
-    });
+    }];
 
     // Build chat request
     const request: ChatRequest = {
       sessionId: session.id,
-      messages: session.messages,
+      messages: messages,
       systemPrompt: session.data.systemPrompt as string ?? this.options.systemPrompt,
       temperature: session.data.temperature as number ?? this.options.temperature ?? 0.7,
       maxTokens: session.data.maxTokens as number ?? this.options.maxTokens ?? 4096

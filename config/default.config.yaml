@@ -5,10 +5,10 @@ gateway:
   id: main_gateway
 
 session:
-  maxHistory: 50           # Maximum messages per session
+  maxHistory: 50
 
 router:
-  defaultProvider: claude-code-local
+  defaultProvider: claude-code
   systemPrompt: |
     You are a helpful AI assistant answering questions in Chinese.
   maxTokens: 4096
@@ -21,12 +21,11 @@ channels:
       options:
         appSecret: ${LARK_APP_SECRET}
 
-# Claude Code Provider Configuration
+# Claude Code Provider Configuration (Resume Mode)
 providers:
   claude-code-provider:
-    - id: claude-code-local
+    - id: claude-code
       enabled: true
       workingDirectory: /root/opendev/buuo
-      enableTools: true           # Enable tool access
-      sessionTimeout: 3600000     # 1 hour
-      requestTimeout: 300000      # 5 minutes
+      enableTools: true
+      requestTimeout: 300000
