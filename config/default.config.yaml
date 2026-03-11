@@ -3,11 +3,9 @@
 
 gateway:
   id: main_gateway
-  cleanupInterval: 300000  # 5 minutes
 
 session:
   maxHistory: 50           # Maximum messages per session
-  timeout: 3600000         # 1 hour session timeout
 
 router:
   defaultProvider: claude-code-local

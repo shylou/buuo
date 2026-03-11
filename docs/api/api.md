@@ -49,15 +49,13 @@ await gateway.start();
 
 #### `class SessionManager`
 
-Manages conversation sessions with message history.
+Manages conversation sessions with message history. Sessions persist in memory until the gateway restarts.
 
 ```typescript
 import { SessionManager } from '@buuo/core';
 
 const sessions = new SessionManager({
-  maxHistory: 100,
-  timeout: 3600000,
-  autoDelete: false
+  maxHistory: 100
 });
 
 const session = await sessions.getOrCreate(message);
@@ -74,7 +72,6 @@ sessions.addMessage(session.id, chatMessage);
 - `deactivate(sessionId: string): void` - Deactivate session
 - `delete(sessionId: string): void` - Delete session
 - `listActive(): Session[]` - List active sessions
-- `cleanup(): Promise<void>` - Clean up inactive sessions
 - `getStats(): SessionStats` - Get session statistics
 
 ### Message Router

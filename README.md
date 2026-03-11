@@ -107,7 +107,6 @@ providers:
       enabled: true
       workingDirectory: /root/opendev/buuo
       enableTools: true
-      sessionTimeout: 3600000    # Session timeout (1 hour)
       requestTimeout: 300000     # Request timeout (5 minutes)
 
 # Feishu/Lark Channel

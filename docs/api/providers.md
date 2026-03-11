@@ -140,9 +140,6 @@ interface ProviderConfig {
   /** Enable tool access */
   enableTools?: boolean;
 
-  /** Session timeout (ms) */
-  sessionTimeout?: number;
-
   /** Request timeout (ms) */
   requestTimeout?: number;
 }

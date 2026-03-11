@@ -24,9 +24,6 @@ export interface GatewayConfig {
 
   /** Auto-start plugins */
   autoStartPlugins?: boolean;
-
-  /** Cleanup interval in milliseconds */
-  cleanupInterval?: number;
 }
 
 export interface GatewayStatus {
@@ -72,7 +69,6 @@ export class Gateway extends EventEmitter {
   private readonly id: string;
   private _running = false;
   private _startTime?: Date;
-  private _cleanupTimer?: NodeJS.Timeout;
   private readonly channelConfigs = new Map<string, object>(); // Store channel configs
   private readonly providerConfigs = new Map<string, object>(); // Store provider configs
 
@@ -169,14 +165,6 @@ export class Gateway extends EventEmitter {
     this._running = true;
     this._startTime = new Date();
 
-    // Start cleanup timer
-    const cleanupInterval = this.config.cleanupInterval ?? 300000; // 5 minutes
-    this._cleanupTimer = setInterval(() => {
-      this.sessions.cleanup().catch(err => {
-        this.logger.error(`Session cleanup failed: ${err}`);
-      });
-    }, cleanupInterval);
-
     this.logger.info('Gateway started');
     this.emit('started');
   }
@@ -203,12 +191,6 @@ export class Gateway extends EventEmitter {
 
     // Stop plugins
     await this.plugins.stopAll();
-
-    // Clear cleanup timer
-    if (this._cleanupTimer) {
-      clearInterval(this._cleanupTimer);
-      this._cleanupTimer = undefined;
-    }
 
     this._running = false;
     this.logger.info('Gateway stopped');

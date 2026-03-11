@@ -10,12 +10,6 @@ import type { Logger } from '../utils/logger.js';
 export interface SessionOptions {
   /** Maximum messages to keep in history */
   maxHistory?: number;
-
-  /** Session timeout in milliseconds */
-  timeout?: number;
-
-  /** Auto-delete after timeout */
-  autoDelete?: boolean;
 }
 
 export interface Session {
@@ -218,34 +212,6 @@ export class SessionManager {
    */
   listActive(): Session[] {
     return Array.from(this.sessions.values()).filter(s => s.active);
-  }
-
-  /**
-   * Clean up inactive sessions
-   */
-  async cleanup(): Promise<void> {
-    const timeout = this.options.timeout ?? 3600000; // 1 hour default
-    const now = Date.now();
-    const toDelete: string[] = [];
-
-    for (const [id, session] of this.sessions) {
-      const inactive = now - session.lastActivity.getTime();
-      if (inactive > timeout && session.active) {
-        if (this.options.autoDelete) {
-          toDelete.push(id);
-        } else {
-          this.deactivate(id);
-        }
-      }
-    }
-
-    for (const id of toDelete) {
-      this.delete(id);
-    }
-
-    if (toDelete.length > 0) {
-      this.logger?.info(`Cleaned up ${toDelete.length} inactive sessions`);
-    }
   }
 
   /**
