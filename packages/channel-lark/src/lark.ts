@@ -21,6 +21,95 @@ import type {
   LarkSendMessageOptions,
 } from './types.js';
 
+/** Lark API response types */
+interface LarkMessageResponse {
+  code: number;
+  msg?: string;
+  data?: {
+    message_id?: string;
+  };
+  message_id?: string;
+}
+
+interface LarkTokenResponse {
+  code: number;
+  msg?: string;
+  tenant_access_token?: string;
+  expire?: number;
+}
+
+/** Constants for Lark channel configuration */
+const LARK_CONSTANTS = {
+  /** Maximum tables per message (Feishu allows ~10) */
+  TABLE_LIMIT: 8,
+  /** Conservative character limit per message */
+  CHAR_LIMIT: 12000,
+  /** Update character limit */
+  UPDATE_CHAR_LIMIT: 10000,
+  /** Maximum cached message IDs for deduplication */
+  MAX_CACHED_MESSAGE_IDS: 1000,
+  /** Heartbeat check interval (ms) */
+  HEARTBEAT_INTERVAL: 300000,
+  /** WebSocket retry interval (ms) */
+  RETRY_INTERVAL: 1000,
+  /** Maximum retry count */
+  MAX_RETRY_COUNT: 5,
+  /** Delay between message parts (ms) */
+  MESSAGE_PART_DELAY: 1000,
+  /** Delay for additional update parts (ms) */
+  UPDATE_PART_DELAY: 800,
+  /** Image download timeout (ms) */
+  IMAGE_DOWNLOAD_TIMEOUT: 30000,
+  /** Token expiry buffer (seconds) - refresh 1 hour early */
+  TOKEN_EXPIRY_BUFFER: 3600,
+} as const;
+
+/**
+ * LRU Cache for message deduplication
+ */
+class LRUCache<K, V> {
+  private readonly cache = new Map<K, V>();
+  private readonly maxSize: number;
+
+  constructor(maxSize: number) {
+    this.maxSize = maxSize;
+  }
+
+  get(key: K): V | undefined {
+    const value = this.cache.get(key);
+    if (value !== undefined) {
+      // Move to end (most recently used)
+      this.cache.delete(key);
+      this.cache.set(key, value);
+    }
+    return value;
+  }
+
+  set(key: K, value: V): void {
+    // Remove existing key if present
+    if (this.cache.has(key)) {
+      this.cache.delete(key);
+    }
+    // Add to end
+    this.cache.set(key, value);
+    // Evict oldest if at capacity
+    if (this.cache.size > this.maxSize) {
+      const firstKey = this.cache.keys().next().value;
+      if (firstKey !== undefined) {
+        this.cache.delete(firstKey);
+      }
+    }
+  }
+
+  has(key: K): boolean {
+    return this.cache.has(key);
+  }
+
+  get size(): number {
+    return this.cache.size;
+  }
+}
+
 /**
  * Lark/Feishu channel for Buuo AI Assistant
  * Uses WebSocket long connection mode (no public IP required)
@@ -40,7 +129,7 @@ export class LarkChannel implements Channel {
   private tenantAccessToken?: string;
   private tokenExpireTime?: number;
   private imageCacheDir: string;
-  private processedMessageIds = new Set<string>(); // Message deduplication
+  private processedMessageIds = new LRUCache<string, true>(LARK_CONSTANTS.MAX_CACHED_MESSAGE_IDS);
 
   constructor(options: { id?: string } = {}) {
     this.id = options.id || 'lark-channel';
@@ -115,8 +204,8 @@ export class LarkChannel implements Channel {
       appSecret: this.config.appSecret,
       loggerLevel: sdk.LoggerLevel.warn, // Reduced from info
       domain: 'https://open.feishu.cn',
-      retryInterval: 1000,
-      maxRetryCount: 5,
+      retryInterval: LARK_CONSTANTS.RETRY_INTERVAL,
+      maxRetryCount: LARK_CONSTANTS.MAX_RETRY_COUNT,
     } as any);
 
     // Start WebSocket connection
@@ -137,7 +226,7 @@ export class LarkChannel implements Channel {
       if (!connected) {
         this.logWarn('[Lark] Connection lost');
       }
-    }, 300000);
+    }, LARK_CONSTANTS.HEARTBEAT_INTERVAL);
   }
 
   /**
@@ -175,9 +264,9 @@ export class LarkChannel implements Channel {
 
         lastMessageId = await this.sendMessageInternal(conversationId, partContent + partIndicator);
 
-        // Add delay between parts to avoid rate limiting (1 second)
+        // Add delay between parts to avoid rate limiting
         if (i < parts.length - 1) {
-          await this.sleep(1000);
+          await this.sleep(LARK_CONSTANTS.MESSAGE_PART_DELAY);
         }
       }
 
@@ -235,9 +324,10 @@ export class LarkChannel implements Channel {
           msg_type: sendOptions.msgType,
           content: JSON.stringify(sendOptions.content),
         },
-      });
+      }) as LarkMessageResponse;
+
       // Return message_id for potential updates (access via data property)
-      return (response as any)?.data?.message_id || (response as any)?.message_id;
+      return response.data?.message_id || response.message_id;
     } catch (error) {
       this.logError('Failed to send Lark message:', error);
       throw error;
@@ -249,18 +339,15 @@ export class LarkChannel implements Channel {
    * Feishu limits: ~10 tables per card, ~15000 chars per message
    */
   private splitContentIfNeeded(content: string): string[] {
-    const TABLE_LIMIT = 8; // Conservative limit (Feishu allows ~10)
-    const CHAR_LIMIT = 12000; // Conservative character limit
-
     const tableCount = this.countMarkdownTables(content);
-    const isTooLong = content.length > CHAR_LIMIT || tableCount > TABLE_LIMIT;
+    const isTooLong = content.length > LARK_CONSTANTS.CHAR_LIMIT || tableCount > LARK_CONSTANTS.TABLE_LIMIT;
 
     if (!isTooLong) {
       return [content];
     }
 
     this.log(`[Lark] Content too long: ${content.length} chars, ${tableCount} tables`);
-    return this.smartSplitContent(content, TABLE_LIMIT, CHAR_LIMIT);
+    return this.smartSplitContent(content, LARK_CONSTANTS.TABLE_LIMIT, LARK_CONSTANTS.CHAR_LIMIT);
   }
 
   /**
@@ -366,12 +453,11 @@ export class LarkChannel implements Channel {
     }
 
     // Check if content needs truncation for update
-    const UPDATE_CHAR_LIMIT = 10000; // Conservative limit for updates
-    const needsSplit = content.length > UPDATE_CHAR_LIMIT || this.countMarkdownTables(content) > 5;
+    const needsSplit = content.length > LARK_CONSTANTS.UPDATE_CHAR_LIMIT || this.countMarkdownTables(content) > 5;
 
     if (needsSplit && conversationId) {
       // Content too long for update - truncate and send rest as new messages
-      const parts = this.smartSplitContent(content, 5, UPDATE_CHAR_LIMIT);
+      const parts = this.smartSplitContent(content, 5, LARK_CONSTANTS.UPDATE_CHAR_LIMIT);
 
       // Update with first part (truncated)
       await this.updateMessageInternal(messageId, parts[0]);
@@ -380,14 +466,14 @@ export class LarkChannel implements Channel {
       if (parts.length > 1) {
         this.log(`[Lark] Update truncated, sending ${parts.length - 1} additional parts`);
         for (let i = 1; i < parts.length; i++) {
-          await this.sleep(800); // Longer delay to avoid rate limiting
+          await this.sleep(LARK_CONSTANTS.UPDATE_PART_DELAY);
           await this.sendMessageInternal(conversationId, parts[i] + `\n\n_${i + 1}/${parts.length}_`);
         }
       }
     } else {
       // Short content, update directly (truncate if still too long)
-      const truncatedContent = content.length > UPDATE_CHAR_LIMIT
-        ? content.slice(0, UPDATE_CHAR_LIMIT) + '\n\n_(Content truncated, full response sent separately)_'
+      const truncatedContent = content.length > LARK_CONSTANTS.UPDATE_CHAR_LIMIT
+        ? content.slice(0, LARK_CONSTANTS.UPDATE_CHAR_LIMIT) + '\n\n_(Content truncated, full response sent separately)_'
         : content;
 
       await this.updateMessageInternal(messageId, truncatedContent);
@@ -466,20 +552,12 @@ export class LarkChannel implements Channel {
 
     const { sender, message } = data;
 
-    // Message deduplication - skip already processed messages
+    // Message deduplication - skip already processed messages (LRU cache)
     const messageId = message.message_id;
     if (!messageId || this.processedMessageIds.has(messageId)) {
       return; // Skip duplicate or invalid messages
     }
-    this.processedMessageIds.add(messageId);
-
-    // Clean up old message IDs (keep last 1000)
-    if (this.processedMessageIds.size > 1000) {
-      const firstId = this.processedMessageIds.values().next().value;
-      if (firstId) {
-        this.processedMessageIds.delete(firstId);
-      }
-    }
+    this.processedMessageIds.set(messageId, true);
 
     // Parse message content and extract attachments
     let content = '';
@@ -627,7 +705,7 @@ export class LarkChannel implements Channel {
         reject(err);
       });
 
-      req.setTimeout(30000, () => {
+      req.setTimeout(LARK_CONSTANTS.IMAGE_DOWNLOAD_TIMEOUT, () => {
         req.destroy();
         reject(new Error('Download timeout'));
       });
@@ -652,13 +730,13 @@ export class LarkChannel implements Channel {
           app_id: this.config.appId,
           app_secret: this.config.appSecret,
         },
-      }) as any;
+      }) as LarkTokenResponse;
 
       if (response.code === 0 && response.tenant_access_token) {
         const token = response.tenant_access_token;
         this.tenantAccessToken = token;
-        // Token expires in 2 hours, set expiry 1 hour early for safety
-        this.tokenExpireTime = Date.now() + ((response.expire || 7200) - 3600) * 1000;
+        // Token expires in 2 hours, set expiry early for safety
+        this.tokenExpireTime = Date.now() + ((response.expire || 7200) - LARK_CONSTANTS.TOKEN_EXPIRY_BUFFER) * 1000;
         return token;
       }
 

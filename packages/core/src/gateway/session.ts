@@ -7,6 +7,14 @@ import type { IncomingMessage } from '../channels/index.js';
 import type { ChatMessage } from '../providers/index.js';
 import type { Logger } from '../utils/logger.js';
 
+/** Session management constants */
+const SESSION_CONSTANTS = {
+  /** Default maximum messages to keep in history */
+  DEFAULT_MAX_HISTORY: 100,
+  /** Session ID prefix */
+  SESSION_ID_PREFIX: 'sess_',
+} as const;
+
 export interface SessionOptions {
   /** Maximum messages to keep in history */
   maxHistory?: number;
@@ -45,6 +53,7 @@ export class SessionManager {
   private readonly sessions = new Map<string, Session>();
   private readonly userSessions = new Map<string, Set<string>>();
   private readonly conversationSessions = new Map<string, string>();
+  private readonly activeSessionIds = new Set<string>(); // Track active sessions for O(1) lookup
 
   constructor(
     private readonly options: SessionOptions = {},
@@ -88,6 +97,7 @@ export class SessionManager {
 
     this.sessions.set(sessionId, session);
     this.conversationSessions.set(message.conversationId, sessionId);
+    this.activeSessionIds.add(sessionId);
 
     // Track by user
     if (!this.userSessions.has(message.userId)) {
@@ -137,7 +147,7 @@ export class SessionManager {
     session.lastActivity = new Date();
 
     // Trim history if needed
-    const maxHistory = this.options.maxHistory ?? 100;
+    const maxHistory = this.options.maxHistory ?? SESSION_CONSTANTS.DEFAULT_MAX_HISTORY;
     if (session.messages.length > maxHistory) {
       session.messages = session.messages.slice(-maxHistory);
     }
@@ -173,6 +183,7 @@ export class SessionManager {
     if (!session) return;
 
     session.active = false;
+    this.activeSessionIds.delete(sessionId);
     this.conversationSessions.delete(session.conversationId);
 
     const userSessions = this.userSessions.get(session.userId);
@@ -194,6 +205,7 @@ export class SessionManager {
     if (!session) return;
 
     this.sessions.delete(sessionId);
+    this.activeSessionIds.delete(sessionId);
     this.conversationSessions.delete(session.conversationId);
 
     const userSessions = this.userSessions.get(session.userId);
@@ -208,10 +220,12 @@ export class SessionManager {
   }
 
   /**
-   * List all active sessions
+   * List all active sessions (optimized with activeSessionIds Set)
    */
   listActive(): Session[] {
-    return Array.from(this.sessions.values()).filter(s => s.active);
+    return Array.from(this.activeSessionIds)
+      .map(id => this.sessions.get(id))
+      .filter((s): s is Session => s !== undefined && s.active);
   }
 
   /**
@@ -235,6 +249,6 @@ export class SessionManager {
   private generateSessionId(message: IncomingMessage): string {
     const timestamp = Date.now();
     const random = Math.random().toString(36).substring(2, 10);
-    return `sess_${message.conversationId}_${timestamp}_${random}`;
+    return `${SESSION_CONSTANTS.SESSION_ID_PREFIX}${message.conversationId}_${timestamp}_${random}`;
   }
 }
