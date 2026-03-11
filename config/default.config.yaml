@@ -26,6 +26,6 @@ providers:
   claude-code-provider:
     - id: claude-code
       enabled: true
-      workingDirectory: /root/opendev/buuo
+      workingDirectory: /root/opendev    # Default: /root/opendev
       enableTools: true
       requestTimeout: 300000

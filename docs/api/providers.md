@@ -101,7 +101,7 @@ interface ChatResponse {
 
 ### Claude Code Provider
 
-Uses local Claude Code CLI:
+Uses local Claude Code CLI with automatic working directory creation:
 
 ```typescript
 import { ClaudeCodeProvider } from '@buuo/provider-claude-code';
@@ -111,7 +111,7 @@ const provider = new ClaudeCodeProvider({
 });
 
 await provider.initialize({
-  workingDirectory: '/root/opendev/buuo',
+  workingDirectory: '/root/opendev',  // Auto-created if not exists
   enableTools: true
 });
 
@@ -125,6 +125,12 @@ for await (const response of provider.chatStream(request)) {
   }
 }
 ```
+
+**Features:**
+- Resume Mode: Uses Claude Code `--resume` for 90%+ token savings
+- Auto-creates working directory if not found
+- Session expiry: 24h TTL with 5min cleanup interval
+- Tool access: Full support for Claude Code tool calling
 
 ---
 

@@ -15,6 +15,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stream-based AI responses with real-time delivery
 - Configurable timeouts and session handling
 - Markdown card support for rich text rendering
+- LRU cache for automatic memory management
+- Session expiry mechanism with periodic cleanup (24h TTL, 5min cleanup interval)
+- Per-conversation locking to prevent concurrent processing race conditions
+- **Auto-create working directory** if not found (recursive mkdir with logging)
+
+### Changed
+- Extracted magic numbers to named constants for better maintainability
+- Optimized SessionManager.listActive() from O(n) to O(m) using activeSessionIds Set
+- Replaced `as any` type assertions with proper TypeScript interfaces
+- Enhanced error handling with try-finally pattern for timer cleanup
+- Updated README with accurate configuration examples and default values
+- Clarified session history default (100 messages) vs config example (50 messages)
+- Set default workingDirectory to `/root/opendev` in configuration
+
+### Fixed
+- Timer leak in gateway message handling (immediateUpdateTimer now properly cleaned up)
+- Session ID memory leak (unbounded cache now has 24h TTL with automatic cleanup)
+- Conversation channel unbounded growth (LRU cache with 1000 entry limit)
+- Lark message ID cache unbounded growth (LRU cache with 1000 entry limit)
+- Concurrent message processing race condition (per-conversation locks)
+- Configuration documentation to match actual code defaults (maxHistory, temperature, etc.)
 
 ### Channels
 - **Lark/Feishu** - WebSocket mode, no public IP required

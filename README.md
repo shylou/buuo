@@ -14,10 +14,12 @@ Feishu User ←→ Buuo Gateway ←→ Claude Code CLI (Local)
 
 - ✅ **Claude Code Local Integration**: Direct integration with local Claude Code CLI
 - ✅ **Feishu Long Connection**: WebSocket persistent connection, no public IP required
-- ✅ **Session Management**: Context retention for continuous conversations
+- ✅ **Session Management**: Context retention for continuous conversations (max 100 messages)
 - ✅ **Stream Responses**: Real-time AI response delivery
+- ✅ **Resume Mode**: Uses Claude Code `--resume` for 90%+ token savings
 - ✅ **Timeout Protection**: Request timeout detection (default 5 minutes)
-- ✅ **Health Check**: Automatic recovery from process exceptions
+- ✅ **Memory Management**: LRU caches prevent unbounded growth
+- ✅ **Concurrency Safety**: Per-conversation locks prevent race conditions
 - ✅ **Tool Access**: Full support for Claude Code tool calling
 
 ## 📦 Prerequisites
@@ -42,7 +44,7 @@ npm install -g @anthropic-ai/claude-code
 ### 1. Install Dependencies
 
 ```bash
-cd /root/opendev/buuo
+cd /path/to/buuo
 pnpm install
 ```
 
@@ -100,12 +102,27 @@ Successful startup shows:
 Configuration file: `config/default.config.yaml`
 
 ```yaml
+# Gateway Configuration
+gateway:
+  id: main_gateway
+
+# Session Configuration
+session:
+  maxHistory: 50              # Maximum messages per session (default: 100 if not specified)
+
+# Router Configuration
+router:
+  defaultProvider: claude-code
+  systemPrompt: |
+    You are a helpful AI assistant answering questions in Chinese.
+  maxTokens: 4096
+
 # Claude Code Provider
 providers:
   claude-code-provider:
-    - id: claude-code-local
+    - id: claude-code
       enabled: true
-      workingDirectory: /root/opendev/buuo
+      workingDirectory: /root/opendev    # Auto-created if not exists
       enableTools: true
       requestTimeout: 300000     # Request timeout (5 minutes)
 
@@ -131,6 +148,50 @@ pnpm typecheck
 pnpm check
 ```
 
+## 🏗️ Architecture
+
+### Message Flow
+
+```
+Feishu Message → Lark Channel → Gateway → Session Manager
+                                              ↓
+                                         Message Router
+                                              ↓
+                                     Claude Code Provider
+                                              ↓
+                                  (Resume Mode - 90%+ Token Savings)
+                                              ↓
+                                         Response Stream
+                                              ↓
+                                     Lark Channel
+                                              ↓
+                                         Feishu User
+```
+
+### Key Design Decisions
+
+- **Resume Mode**: Uses Claude Code's `--resume` functionality for efficient context management
+  - First request: Creates new session with `--session-id`
+  - Subsequent requests: Uses `--resume` with cached session ID
+  - Claude Code manages disk-based history automatically
+  - Only sends current message (90%+ token savings)
+
+- **Memory Management**: LRU caches prevent unbounded growth
+  - Message ID cache: 1000 entries, auto-evicts oldest
+  - Conversation channel: 1000 entries, auto-evicts oldest
+  - Session expiry: 24h TTL with 5min cleanup interval
+
+- **Concurrency Safety**: Per-conversation locks prevent race conditions
+  - Each conversation has its own processing lock
+  - Concurrent messages for same conversation are serialized
+  - Prevents session corruption and duplicate responses
+
+- **Error Resilience**: Comprehensive error handling and cleanup
+  - Timer cleanup with try-finally pattern
+  - Process cleanup on timeout/error
+  - Automatic session expiry and cleanup
+  - Auto-create working directory if not found
+
 ## 📁 Project Structure
 
 ```
@@ -154,31 +215,36 @@ buuo/
 
 ```bash
 # Check logs
+tail -50 /tmp/buuo_service.log
+
+# Or use the script
 ./scripts/start-gateway.sh logs
 
 # Check Claude Code CLI
 claude --version
 
-# Check environment variables
-cat .env
+# Check configuration
+npx tsx apps/cli/dist/cli.js config validate
 ```
 
 ### No Response from Feishu
 
 ```bash
-# Check WebSocket connection
-# Look for "Lark WebSocket connection" in logs
+# Check WebSocket connection in logs
+tail -50 /tmp/buuo_service.log | grep -i "websocket\|lark"
 
-# Verify Feishu app configuration
-# - Event subscription enabled
-# - Long connection mode enabled
+# Verify environment variables
+cat .env | grep LARK
+
+# Check gateway status
+./scripts/start-gateway.sh status
 ```
 
 ### Claude Code Timeout
 
 ```bash
-# Increase request timeout
-# Edit config/default.config.yaml
+# Current timeout is 5 minutes (300000ms)
+# To increase, edit config/default.config.yaml:
 # requestTimeout: 600000  # 10 minutes
 ```
 

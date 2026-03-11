@@ -9,6 +9,7 @@
  */
 
 import { spawn, ChildProcess } from 'child_process';
+import { existsSync } from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import type {
   ProviderConfig,
@@ -81,6 +82,16 @@ export class ClaudeCodeProvider extends BaseProvider {
     if (config.enableTools !== undefined) this.enableTools = config.enableTools;
     if (config.requestTimeout !== undefined) this.requestTimeout = config.requestTimeout;
 
+    // Check and create working directory if needed
+    if (!existsSync(this.workingDirectory)) {
+      this.log(`Working directory not found: ${this.workingDirectory}`);
+      this.log(`Creating directory...`);
+
+      const fs = await import('node:fs/promises');
+      await fs.mkdir(this.workingDirectory, { recursive: true });
+      this.log(`Directory created: ${this.workingDirectory}`);
+    }
+
     this._status = {
       available: true,
       state: 'ready',
@@ -90,7 +101,7 @@ export class ClaudeCodeProvider extends BaseProvider {
     // Start periodic session cleanup
     this.startSessionCleanup();
 
-    this.log(`Initialized (timeout: ${this.requestTimeout}ms, tools: ${this.enableTools})`);
+    this.log(`Initialized (timeout: ${this.requestTimeout}ms, tools: ${this.enableTools}, dir: ${this.workingDirectory})`);
   }
 
   /** Start periodic cleanup of expired sessions */
