@@ -9,6 +9,50 @@ import type { Session } from './session.js';
 import type { IncomingMessage } from '../channels/index.js';
 import type { Logger } from '../utils/logger.js';
 
+/** LRU Cache for conversation to channel mappings */
+class LRUCache<K, V> {
+  private readonly cache = new Map<K, V>();
+  private readonly maxSize: number;
+
+  constructor(maxSize: number) {
+    this.maxSize = maxSize;
+  }
+
+  get(key: K): V | undefined {
+    const value = this.cache.get(key);
+    if (value !== undefined) {
+      // Move to end (most recently used)
+      this.cache.delete(key);
+      this.cache.set(key, value);
+    }
+    return value;
+  }
+
+  set(key: K, value: V): void {
+    // Remove existing key if present
+    if (this.cache.has(key)) {
+      this.cache.delete(key);
+    }
+    // Add to end
+    this.cache.set(key, value);
+    // Evict oldest if at capacity
+    if (this.cache.size > this.maxSize) {
+      const firstKey = this.cache.keys().next().value;
+      if (firstKey !== undefined) {
+        this.cache.delete(firstKey);
+      }
+    }
+  }
+
+  has(key: K): boolean {
+    return this.cache.has(key);
+  }
+
+  get size(): number {
+    return this.cache.size;
+  }
+}
+
 export interface RouterOptions {
   /** Default provider ID */
   defaultProvider?: string;
@@ -29,7 +73,7 @@ export interface RouterOptions {
 export class MessageRouter {
   private readonly channelMap = new Map<string, Channel>();
   private readonly providerMap = new Map<string, AIProvider>();
-  private readonly conversationChannel = new Map<string, string>();
+  private readonly conversationChannel = new LRUCache<string, string>(1000); // LRU cache with max 1000 entries
 
   constructor(
     private readonly options: RouterOptions = {},
