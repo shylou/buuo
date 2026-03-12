@@ -38,6 +38,7 @@ const MAX_TOOL_INPUT_LENGTH = 100;
 const MAX_IMAGE_PATH_LENGTH = 60;
 const SESSION_TTL = 24 * 60 * 60 * 1000; // 24 hours
 const SESSION_CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
+const CANCEL_FORCE_KILL_TIMEOUT = 2500; // Force kill timeout in ms
 
 export class ClaudeCodeProvider extends BaseProvider {
   private cliPath: string;
@@ -51,6 +52,12 @@ export class ClaudeCodeProvider extends BaseProvider {
 
   /** Cache: Buuo session ID -> expiry timestamp */
   private readonly sessionExpiry = new Map<string, number>();
+
+  /** Cache: Buuo session ID -> active child process */
+  private readonly activeProcesses = new Map<string, ChildProcess>();
+
+  /** Track sessions that have been cancelled */
+  private readonly cancelledSessions = new Set<string>();
 
   /** Cleanup interval timer */
   private cleanupTimer?: NodeJS.Timeout;
@@ -121,6 +128,7 @@ export class ClaudeCodeProvider extends BaseProvider {
       if (expiry < now) {
         this.claudeSessionIds.delete(buuoSessionId);
         this.sessionExpiry.delete(buuoSessionId);
+        this.cancelledSessions.delete(buuoSessionId); // Clear cancelled flag too
         cleanedCount++;
       }
     }
@@ -196,11 +204,22 @@ export class ClaudeCodeProvider extends BaseProvider {
     const childProcess = this.spawnProcess(args);
     this.log(`Spawned PID=${childProcess.pid}, mode=${isFirstMessage ? 'new' : 'resume'}`);
 
+    // Track active process for cancellation
+    this.activeProcesses.set(buuoSessionId, childProcess);
+
     // Send message to stdin
     this.writeStdin(childProcess, currentMessage);
 
-    // Stream response
-    yield* this.streamResponse(childProcess, buuoSessionId);
+    try {
+      // Stream response
+      yield* this.streamResponse(childProcess, buuoSessionId);
+
+      // Successfully completed - clear cancellation flag
+      this.cancelledSessions.delete(buuoSessionId);
+    } finally {
+      // Always remove from active processes, even on error
+      this.activeProcesses.delete(buuoSessionId);
+    }
   }
 
   /** Spawn Claude CLI process with configured environment */
@@ -272,11 +291,23 @@ export class ClaudeCodeProvider extends BaseProvider {
 
     // Setup close handler
     process.on('close', (code: number | null) => {
+      // Check if this session was cancelled - don't send empty done: true
+      const isCancelled = this.cancelledSessions.has(sessionId);
+
       if (!hasReceivedData && code !== 0) {
-        enqueue(new Error(`Claude CLI failed (exit code: ${code})`));
+        if (!isCancelled) {
+          enqueue(new Error(`Claude CLI failed (exit code: ${code})`));
+        }
       }
+
       isDone = true;
-      enqueue({ done: true });
+
+      // Only send done: true if not cancelled (prevents empty response overwriting cancel message)
+      if (!isCancelled) {
+        enqueue({ done: true });
+      } else {
+        this.logDebug(`Session ${sessionId} was cancelled, not sending done: true`);
+      }
     });
 
     // Setup error handler
@@ -554,6 +585,7 @@ export class ClaudeCodeProvider extends BaseProvider {
   clearSession(buuoSessionId: string): void {
     this.claudeSessionIds.delete(buuoSessionId);
     this.sessionExpiry.delete(buuoSessionId);
+    this.cancelledSessions.delete(buuoSessionId);
     this.log(`Cleared session: ${buuoSessionId}`);
   }
 
@@ -567,6 +599,79 @@ export class ClaudeCodeProvider extends BaseProvider {
     return new Map(this.claudeSessionIds);
   }
 
+  /**
+   * Cancel an active request for a session
+   * Uses SIGTERM for graceful shutdown (preserves resume capability)
+   * Falls back to SIGKILL after timeout if process doesn't terminate
+   * Note: Session cache is cleared to ensure fresh start on next request
+   * @returns true if process was found and cancellation attempted
+   */
+  cancelRequest(buuoSessionId: string): boolean {
+    const process = this.activeProcesses.get(buuoSessionId);
+    if (!process) {
+      this.logDebug(`Cancel requested but no active process for session: ${buuoSessionId}`);
+      return false;
+    }
+
+    if (process.killed) {
+      this.log(`Cancel requested but process already killed for session: ${buuoSessionId}`);
+      this.activeProcesses.delete(buuoSessionId);
+      return false;
+    }
+
+    this.log(`Cancelling request for session: ${buuoSessionId} (PID=${process.pid})`);
+
+    // Mark session as cancelled so streamResponse won't send empty done: true
+    this.cancelledSessions.add(buuoSessionId);
+
+    // Try graceful shutdown first (SIGTERM preserves session state)
+    process.kill('SIGTERM');
+
+    // Track cleanup to avoid double-delete
+    let cleanedUp = false;
+    let forceKillTimer: NodeJS.Timeout | undefined;
+
+    const cleanup = () => {
+      if (!cleanedUp) {
+        cleanedUp = true;
+        if (forceKillTimer) clearTimeout(forceKillTimer);
+        this.activeProcesses.delete(buuoSessionId);
+
+        // Clear session cache to ensure fresh start on next request
+        // This prevents resuming a potentially corrupted session state
+        this.claudeSessionIds.delete(buuoSessionId);
+        this.sessionExpiry.delete(buuoSessionId);
+        this.log(`Cleared session cache after cancellation: ${buuoSessionId}`);
+      }
+    };
+
+    // Fallback to force kill if graceful shutdown doesn't work
+    forceKillTimer = setTimeout(() => {
+      if (!process.killed) {
+        this.log(`Force killing process for session: ${buuoSessionId} (PID=${process.pid})`);
+        process.kill('SIGKILL');
+      }
+      cleanup();
+    }, CANCEL_FORCE_KILL_TIMEOUT);
+
+    // Clean up when process exits (use once to avoid multiple calls)
+    // Check if process has already exited to avoid missing the event
+    if (process.exitCode !== null || process.signalCode !== null) {
+      // Process already exited, clean up immediately
+      cleanup();
+    } else {
+      process.once('exit', cleanup);
+    }
+
+    return true;
+  }
+
+  /** Check if a session has an active request */
+  hasActiveRequest(buuoSessionId: string): boolean {
+    const process = this.activeProcesses.get(buuoSessionId);
+    return process !== undefined && !process.killed;
+  }
+
   estimateTokens(text: string): number {
     return Math.ceil(text.length / 4);
   }
@@ -578,9 +683,19 @@ export class ClaudeCodeProvider extends BaseProvider {
       this.cleanupTimer = undefined;
     }
 
+    // Kill all active processes
+    for (const [sessionId, process] of this.activeProcesses) {
+      if (!process.killed) {
+        this.log(`Killing active process for session: ${sessionId} (PID=${process.pid})`);
+        process.kill('SIGTERM');
+      }
+    }
+    this.activeProcesses.clear();
+
     // Clear all caches
     this.claudeSessionIds.clear();
     this.sessionExpiry.clear();
+    this.cancelledSessions.clear();
     this.log('Cleanup complete');
   }
 }

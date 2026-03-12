@@ -206,6 +206,14 @@ export class Gateway extends EventEmitter {
   async handleMessage(message: IncomingMessage): Promise<void> {
     const conversationId = message.conversationId;
 
+    // Check for /cancel command FIRST (before locking to allow cancellation)
+    // Case-insensitive match for /cancel with optional surrounding whitespace
+    const cancelCommandRegex = /^\s*\/cancel\s*$/i;
+    if (cancelCommandRegex.test(message.content)) {
+      await this.handleCancelCommand(message);
+      return;
+    }
+
     // Wait for any existing processing of this conversation to complete
     let existingLock = this.conversationLocks.get(conversationId);
     if (existingLock) {
@@ -396,6 +404,79 @@ export class Gateway extends EventEmitter {
     lines.push(...uniqueEvents.slice(-3));
 
     return lines.join('\n');
+  }
+
+  /**
+   * Handle /cancel command - terminate active request for a conversation
+   */
+  private async handleCancelCommand(message: IncomingMessage): Promise<void> {
+    this.log('[Gateway] Handling /cancel command for conversation:', message.conversationId);
+
+    // Get channel from metadata
+    const channelId = message.metadata?.channelId as string;
+    const channel = this.router.getChannel(channelId);
+    if (!channel) {
+      this.log('[Gateway] No channel found for cancel command:', channelId);
+      return;
+    }
+
+    // Get session (conversationId = sessionId in our system)
+    const session = this.sessions.getByConversation(message.conversationId);
+    if (!session) {
+      await channel.sendMessage({
+        conversationId: message.conversationId,
+        content: '没有活动的请求可以取消。'
+      });
+      this.log('[Gateway] No session found for cancel command:', message.conversationId);
+      return;
+    }
+
+    // Get provider from session data, or fallback to first available with cancel support
+    const providerId = session.data.providerId as string;
+    let provider = providerId ? this.router.getProvider(providerId) : undefined;
+
+    // Fallback: find first provider that supports cancel
+    if (!provider) {
+      const providers = this.router.getProviders();
+      provider = providers.find(p => typeof (p as any).cancelRequest === 'function');
+      this.log('[Gateway] Session has no providerId, using fallback provider:', provider?.id || 'none');
+    }
+
+    if (!provider) {
+      await channel.sendMessage({
+        conversationId: message.conversationId,
+        content: '没有可用的 AI 提供器。'
+      });
+      this.log('[Gateway] No provider available for cancel');
+      return;
+    }
+
+    // Check if provider supports cancel operation
+    if (typeof (provider as any).cancelRequest !== 'function') {
+      await channel.sendMessage({
+        conversationId: message.conversationId,
+        content: '此 AI 提供器不支持取消请求。'
+      });
+      this.log('[Gateway] Provider does not support cancel:', provider.id);
+      return;
+    }
+
+    // Attempt cancellation
+    const cancelled = (provider as any).cancelRequest(session.id);
+    this.log('[Gateway] Cancel result for session', session.id, ':', cancelled);
+
+    // Send response message
+    if (cancelled) {
+      await channel.sendMessage({
+        conversationId: message.conversationId,
+        content: '请求已取消。当前请求已终止，会话上下文已保留。'
+      });
+    } else {
+      await channel.sendMessage({
+        conversationId: message.conversationId,
+        content: '没有活动的请求可以取消。'
+      });
+    }
   }
 
   /**
