@@ -97,6 +97,24 @@ Successful startup shows:
 ────────────────────────────────────────
 ```
 
+## 💬 Chat Commands
+
+Buuo supports the following commands in Feishu/Lark:
+
+| Command | Description |
+|---------|-------------|
+| `/model` | Show current model and available models |
+| `/model <alias>` | Switch AI model for current session |
+| `/cancel` | Cancel the active AI request |
+
+**Available Models:**
+- `default` - Default model (Sonnet 4.6)
+- `haiku` - Fast and cost-effective (Haiku 4)
+- `sonnet` - Balanced performance (Sonnet 4.6)
+- `opus` - Highest capability (Opus 4.6)
+
+Model settings are per-session, meaning different conversations can use different models.
+
 ## ⚙️ Configuration
 
 Configuration file: `config/default.config.yaml`

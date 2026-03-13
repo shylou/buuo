@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **/model command** to switch AI models per session (default, haiku, sonnet, opus)
+- **/cancel command** to terminate active AI requests
 - Initial release of Buuo AI Assistant System
 - Local Claude Code CLI integration with tool access
 - Feishu/Lark channel with WebSocket long connection (no public IP required)
@@ -30,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Set default workingDirectory to `/root/opendev` in configuration
 
 ### Fixed
+- **Stdout buffer handling** - process remaining content on stream end to prevent response loss
 - Timer leak in gateway message handling (immediateUpdateTimer now properly cleaned up)
 - Session ID memory leak (unbounded cache now has 24h TTL with automatic cleanup)
 - Conversation channel unbounded growth (LRU cache with 1000 entry limit)
