@@ -11,6 +11,7 @@ import type { ConfigStore } from '../config/store.js';
 import type { Logger } from '../utils/logger.js';
 import { SessionManager, type SessionOptions } from './session.js';
 import { MessageRouter, type RouterOptions } from './router.js';
+import { MODEL_ALIASES, MODEL_DISPLAY_NAMES } from '../providers/model-config.js';
 
 export interface GatewayConfig {
   /** Gateway ID */
@@ -74,6 +75,9 @@ export class Gateway extends EventEmitter {
 
   /** Per-conversation locks to prevent concurrent processing */
   private readonly conversationLocks = new Map<string, Promise<void>>();
+
+  /** /model command regex: matches /model or /model <alias> */
+  private readonly MODEL_COMMAND_REGEX = /^\s*\/model\s*(\S*)\s*$/i;
 
   public readonly sessions: SessionManager;
   public readonly router: MessageRouter;
@@ -206,7 +210,14 @@ export class Gateway extends EventEmitter {
   async handleMessage(message: IncomingMessage): Promise<void> {
     const conversationId = message.conversationId;
 
-    // Check for /cancel command FIRST (before locking to allow cancellation)
+    // Check for /model command FIRST (before locking for immediate response)
+    const modelMatch = message.content.match(this.MODEL_COMMAND_REGEX);
+    if (modelMatch) {
+      await this.handleModelCommand(message, modelMatch[1] || '');
+      return;
+    }
+
+    // Check for /cancel command (before locking to allow cancellation)
     // Case-insensitive match for /cancel with optional surrounding whitespace
     const cancelCommandRegex = /^\s*\/cancel\s*$/i;
     if (cancelCommandRegex.test(message.content)) {
@@ -477,6 +488,70 @@ export class Gateway extends EventEmitter {
         content: '没有活动的请求可以取消。'
       });
     }
+  }
+
+  /**
+   * Handle /model command - switch AI model for the session
+   */
+  private async handleModelCommand(
+    message: IncomingMessage,
+    modelAlias: string
+  ): Promise<void> {
+    this.log('[Gateway] Handling /model command for conversation:', message.conversationId);
+
+    const channelId = message.metadata?.channelId as string;
+    const channel = this.router.getChannel(channelId);
+    if (!channel) {
+      this.log('[Gateway] No channel found for model command:', channelId);
+      return;
+    }
+
+    // No argument: show current model and available models
+    if (!modelAlias) {
+      const session = await this.sessions.getOrCreate(message);
+      const currentModel = (session.data.model as string) || 'default';
+      const currentDisplayName = MODEL_DISPLAY_NAMES[currentModel] || currentModel;
+
+      const modelsList = Object.entries(MODEL_DISPLAY_NAMES)
+        .map(([alias, name]) => {
+          const isCurrent = alias === currentModel ? ' ← 当前' : '';
+          return `- ${alias.padEnd(10)} - ${name}${isCurrent}`;
+        })
+        .join('\n');
+
+      await channel.sendMessage({
+        conversationId: message.conversationId,
+        content: `📊 **当前模型:** ${currentDisplayName}\n\n**可用模型:**\n${modelsList}`
+      });
+      return;
+    }
+
+    // Validate model alias
+    const normalizedAlias = modelAlias.toLowerCase();
+    if (!MODEL_ALIASES[normalizedAlias]) {
+      const availableModels = Object.keys(MODEL_ALIASES).join(', ');
+      await channel.sendMessage({
+        conversationId: message.conversationId,
+        content: `❌ 未知模型: ${modelAlias}\n\n可用模型: ${availableModels}`
+      });
+      return;
+    }
+
+    // Get or create session and update model setting
+    const session = await this.sessions.getOrCreate(message);
+    const modelId = MODEL_ALIASES[normalizedAlias];
+    const displayName = MODEL_DISPLAY_NAMES[normalizedAlias];
+
+    // Update session model (simple approach - just update the setting)
+    session.data.model = modelId;
+    session.lastActivity = new Date();
+
+    await channel.sendMessage({
+      conversationId: message.conversationId,
+      content: `✅ 模型已切换为: **${displayName}**\n\n当前会话将使用新模型。`
+    });
+
+    this.logger?.info(`Model switched for session ${session.id}: ${displayName} (${modelId})`);
   }
 
   /**

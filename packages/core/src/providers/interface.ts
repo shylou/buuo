@@ -66,6 +66,9 @@ export interface ChatRequest {
   /** Maximum tokens to generate */
   maxTokens?: number;
 
+  /** Model identifier (overrides provider default) */
+  model?: string;
+
   /** Tool definitions */
   tools?: ToolDefinition[];
 

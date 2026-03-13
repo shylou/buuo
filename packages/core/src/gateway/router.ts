@@ -150,7 +150,8 @@ export class MessageRouter {
       messages: messages,
       systemPrompt: session.data.systemPrompt as string ?? this.options.systemPrompt,
       temperature: session.data.temperature as number ?? this.options.temperature ?? 0.7,
-      maxTokens: session.data.maxTokens as number ?? this.options.maxTokens ?? 4096
+      maxTokens: session.data.maxTokens as number ?? this.options.maxTokens ?? 4096,
+      model: session.data.model as string
     };
 
     // Route to provider

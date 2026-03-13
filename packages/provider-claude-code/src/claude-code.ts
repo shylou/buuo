@@ -192,9 +192,17 @@ export class ClaudeCodeProvider extends BaseProvider {
       '--verbose',
       '--include-partial-messages',
       '--permission-mode', 'auto',
-      isFirstMessage ? '--session-id' : '--resume',
-      claudeSessionId!,
     ];
+
+    // Add model parameter if specified
+    if (request.model) {
+      args.push('--model', request.model);
+    }
+
+    args.push(
+      isFirstMessage ? '--session-id' : '--resume',
+      claudeSessionId!
+    );
 
     if (!this.enableTools) {
       args.push('--allowed-tools', '');
@@ -275,6 +283,15 @@ export class ClaudeCodeProvider extends BaseProvider {
         if (line.trim()) {
           this.parseMessageLine(line, enqueue);
         }
+      }
+    });
+
+    // Process remaining buffer content when stdout ends
+    process.stdout?.on('end', () => {
+      if (buffer.trim()) {
+        this.logDebug(`Processing remaining buffer on stdout end: ${buffer.substring(0, 100)}`);
+        this.parseMessageLine(buffer, enqueue);
+        buffer = '';
       }
     });
 
