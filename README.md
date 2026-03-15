@@ -39,6 +39,17 @@ npm install -g @anthropic-ai/claude-code
 # - Enable event subscription (long connection mode)
 ```
 
+> **⚠️ Claude Code Version Compatibility**
+>
+> Starting from Claude Code v2.1.75, the `--permission-mode auto` flag has restricted tool usage permissions. For full MCP tool functionality, we recommend using Claude Code v2.1.73 or earlier:
+>
+> ```bash
+> # Install recommended version
+> npm install -g @anthropic-ai/claude-code@2.1.73
+> ```
+>
+> Support for newer Claude Code versions with enhanced permission control is currently under development.
+
 ## 🚀 Quick Start
 
 ### 1. Install Dependencies
