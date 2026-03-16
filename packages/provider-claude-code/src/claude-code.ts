@@ -27,6 +27,8 @@ export interface ClaudeCodeConfig extends ProviderConfig {
   enableTools?: boolean;
   /** Request timeout in milliseconds (default: 300000 = 5 minutes) */
   requestTimeout?: number;
+  /** Allowed tools list (whitelist for --allowed-tools flag) */
+  allowedTools?: string[];
 }
 
 /** Constants for configuration */
@@ -45,6 +47,7 @@ export class ClaudeCodeProvider extends BaseProvider {
   private workingDirectory: string;
   private enableTools: boolean;
   private requestTimeout: number;
+  private allowedTools: string[];
   private cleanEnv: Record<string, string> | null = null;
 
   /** Cache: Buuo session ID -> Claude session ID */
@@ -79,6 +82,7 @@ export class ClaudeCodeProvider extends BaseProvider {
     this.workingDirectory = process.cwd();
     this.enableTools = true;
     this.requestTimeout = DEFAULT_TIMEOUT;
+    this.allowedTools = [];
   }
 
   protected async doInitialize(): Promise<void> {
@@ -88,6 +92,7 @@ export class ClaudeCodeProvider extends BaseProvider {
     if (config.workingDirectory) this.workingDirectory = config.workingDirectory;
     if (config.enableTools !== undefined) this.enableTools = config.enableTools;
     if (config.requestTimeout !== undefined) this.requestTimeout = config.requestTimeout;
+    if (config.allowedTools) this.allowedTools = config.allowedTools;
 
     // Check and create working directory if needed
     if (!existsSync(this.workingDirectory)) {
@@ -108,7 +113,17 @@ export class ClaudeCodeProvider extends BaseProvider {
     // Start periodic session cleanup
     this.startSessionCleanup();
 
-    this.log(`Initialized (timeout: ${this.requestTimeout}ms, tools: ${this.enableTools}, dir: ${this.workingDirectory})`);
+    if (this.enableTools && this.allowedTools.length > 0) {
+      // Format tools list: compact for small lists, expand for large ones
+      const toolsStr = this.allowedTools.length <= 8
+        ? this.allowedTools.join(', ')
+        : `${this.allowedTools.slice(0, 6).join(', ')}... (+${this.allowedTools.length - 6} more)`;
+      this.log(`Initialized (timeout: ${this.requestTimeout}ms, tools: ${this.allowedTools.length}, dir: ${this.workingDirectory})`);
+      this.log(`Allowed: ${toolsStr}`);
+    } else {
+      const toolsInfo = !this.enableTools ? 'disabled' : 'default tools';
+      this.log(`Initialized (timeout: ${this.requestTimeout}ms, tools: ${toolsInfo}, dir: ${this.workingDirectory})`);
+    }
   }
 
   /** Start periodic cleanup of expired sessions */
@@ -199,14 +214,17 @@ export class ClaudeCodeProvider extends BaseProvider {
       args.push('--model', request.model);
     }
 
+    // Configure allowed tools
+    if (!this.enableTools) {
+      args.push('--allowed-tools', '');
+    } else if (this.allowedTools.length > 0) {
+      args.push('--allowed-tools', this.allowedTools.join(','));
+    }
+
     args.push(
       isFirstMessage ? '--session-id' : '--resume',
       claudeSessionId!
     );
-
-    if (!this.enableTools) {
-      args.push('--allowed-tools', '');
-    }
 
     // Spawn Claude CLI process
     const childProcess = this.spawnProcess(args);

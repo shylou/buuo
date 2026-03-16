@@ -41,14 +41,19 @@ npm install -g @anthropic-ai/claude-code
 
 > **⚠️ Claude Code Version Compatibility**
 >
-> Starting from Claude Code v2.1.75, the `--permission-mode auto` flag has restricted tool usage permissions. For full MCP tool functionality, we recommend using Claude Code v2.1.73 or earlier:
+> Starting from Claude Code v2.1.75, the `--permission-mode auto` flag has restricted tool usage permissions. Buuo now supports `allowedTools` configuration for fine-grained tool control:
 >
-> ```bash
-> # Install recommended version
-> npm install -g @anthropic-ai/claude-code@2.1.73
+> ```yaml
+> providers:
+>   claude-code-provider:
+>     - id: claude-code
+>       allowedTools:
+>         - Read, Write, Edit, Grep, Glob
+>         - Bash(python3:*), Bash(git:*)
+>         - mcp__*  # All MCP tools
 > ```
 >
-> Support for newer Claude Code versions with enhanced permission control is currently under development.
+> For full MCP tool functionality with newer Claude Code versions, configure the `allowedTools` list to explicitly enable required tools.
 
 ## 🚀 Quick Start
 
@@ -126,6 +131,78 @@ Buuo supports the following commands in Feishu/Lark:
 
 Model settings are per-session, meaning different conversations can use different models.
 
+## 🛡️ Tool Access Control
+
+Buuo supports fine-grained tool access control through the `allowedTools` configuration. This allows you to restrict which tools Claude Code can use.
+
+### Tool Categories
+
+| Category | Tools | Description |
+|----------|-------|-------------|
+| File Operations | `Read`, `Write`, `Edit` | File read, write, and edit operations |
+| Search | `Grep`, `Glob` | Content search and file pattern matching |
+| Interaction | `AskUserQuestion` | User interaction prompts |
+| Scripting | `Bash(python3:*)`, `Bash(git:*)` | Python scripts and Git operations |
+| MCP Tools | `mcp__*` | All MCP tools (Context7, Jira, etc.) |
+
+### Example Configurations
+
+**Conservative (Read-only + MCP):**
+```yaml
+allowedTools:
+  - Read
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - mcp__*
+```
+
+**Standard (File operations + MCP):**
+```yaml
+allowedTools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - mcp__*
+```
+
+**Full (All tools including scripting):**
+```yaml
+allowedTools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - Bash(python3:*)
+  - Bash(git:*)
+  - mcp__context7__*
+  - mcp__jira__*
+  - mcp__sequential-thinking__*
+  - mcp__magic__*
+  - mcp__web_reader__*
+  - mcp__4_5v_mcp__*
+  - mcp__zai-mcp-server__*
+  - mcp__zread__*
+```
+
+### MCP Tool Reference
+
+| MCP Tool | Purpose |
+|----------|---------|
+| `mcp__context7__*` | Official library documentation lookup |
+| `mcp__jira__*` | Jira issue tracking integration |
+| `mcp__sequential-thinking__*` | Multi-step reasoning engine |
+| `mcp__magic__*` | UI component generation (21st.dev) |
+| `mcp__web_reader__*` | Web content fetching |
+| `mcp__4_5v_mcp__*` | Image analysis |
+| `mcp__zai-mcp-server__*` | Image/video analysis and more |
+| `mcp__zread__*` | GitHub repository access |
+
 ## ⚙️ Configuration
 
 Configuration file: `config/default.config.yaml`
@@ -154,6 +231,25 @@ providers:
       workingDirectory: /root/opendev    # Auto-created if not exists
       enableTools: true
       requestTimeout: 300000     # Request timeout (5 minutes)
+      # Allowed tools (optional whitelist)
+      # If not specified, all tools are available (subject to permission-mode)
+      allowedTools:
+        - Read              # File read operations
+        - Write             # File write operations
+        - Edit              # File edit operations
+        - Grep              # Content search
+        - Glob              # File pattern matching
+        - AskUserQuestion   # User interaction
+        - Bash(python3:*)   # Python scripts (for skills)
+        - Bash(git:*)       # Git operations
+        - mcp__context7__*  # Documentation lookup
+        - mcp__jira__*      # Jira integration
+        - mcp__sequential-thinking__*  # Complex reasoning
+        - mcp__magic__*     # UI component generation
+        - mcp__web_reader__* # Web content fetching
+        - mcp__4_5v_mcp__*  # Image analysis
+        - mcp__zai-mcp-server__*  # Image/video analysis
+        - mcp__zread__*     # GitHub repo access
 
 # Feishu/Lark Channel
 channels:

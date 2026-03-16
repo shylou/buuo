@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **allowedTools configuration** for Claude Code provider to control tool access
+  - Support for whitelisting specific tools (Read, Write, Edit, Grep, Glob, etc.)
+  - Support for Bash patterns (e.g., `Bash(python3:*)` for skills, `Bash(git:*)` for git)
+  - Support for MCP tools (Jira, Context7, Sequential-thinking, Magic, etc.)
+  - Tools passed via `--allowed-tools` flag with `--permission-mode auto`
 - **/model command** to switch AI models per session (default, haiku, sonnet, opus)
 - **/cancel command** to terminate active AI requests
 - Initial release of Buuo AI Assistant System
