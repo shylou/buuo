@@ -1,9 +1,9 @@
 # Buuo - Claude Code Local Integration Assistant
 
-🦐 Personal AI assistant system connecting Feishu/Lark with local Claude Code CLI
+🦐 Personal AI assistant system connecting Feishu/Lark with Claude (CLI or SDK)
 
 ```
-Feishu User ←→ Buuo Gateway ←→ Claude Code CLI (Local)
+Feishu User ←→ Buuo Gateway ←→ Claude (CLI / Agent SDK)
                      ↓
           Session Management + Timeout Detection + Error Handling
 ```
@@ -12,15 +12,22 @@ Feishu User ←→ Buuo Gateway ←→ Claude Code CLI (Local)
 
 ## ✨ Key Features
 
-- ✅ **Claude Code Local Integration**: Direct integration with local Claude Code CLI
-- ✅ **Feishu Long Connection**: WebSocket persistent connection, no public IP required
-- ✅ **Session Management**: Context retention for continuous conversations (max 100 messages)
-- ✅ **Stream Responses**: Real-time AI response delivery
-- ✅ **Resume Mode**: Uses Claude Code `--resume` for 90%+ token savings
-- ✅ **Timeout Protection**: Request timeout detection (default 5 minutes)
-- ✅ **Memory Management**: LRU caches prevent unbounded growth
-- ✅ **Concurrency Safety**: Per-conversation locks prevent race conditions
-- ✅ **Tool Access**: Full support for Claude Code tool calling
+- ✅ **Dual Provider Support**: Choose between CLI or Agent SDK
+- ✅ **MCP Server Support**: Extend capabilities with external tools
+- ✅ **Feishu Integration**: WebSocket long connection, no public IP required
+- ✅ **Session Management**: Context retention with automatic cleanup
+- ✅ **Real-time Streaming**: Fast response delivery
+- ✅ **Tool Access Control**: Fine-grained permission management
+
+## 📊 Provider Comparison
+
+| Feature | CLI Provider | Agent SDK Provider |
+|:--------|:-------------|:-------------------|
+| **MCP Config** | `claude.json` (user config dir) | `.mcp.json` (buuo directory) |
+| **Session Mode** | Resume mode (90% savings) | SDK-managed persistence |
+| **Streaming** | Parsed from CLI stdout | Native API streaming |
+| **Use When** | Local CLI, no API key | Simpler setup, direct API |
+| **Default** | No | ✅ Yes (v2.0.1+) |
 
 ## 📦 Prerequisites
 
@@ -31,30 +38,18 @@ node --version
 # 2. Install pnpm
 npm install -g pnpm
 
-# 3. Install Claude Code CLI
-npm install -g @anthropic-ai/claude-code
-
-# 4. Prepare Feishu/Lark App
+# 3. Prepare Feishu/Lark App
 # - Create Feishu app, get App ID and App Secret
 # - Enable event subscription (long connection mode)
+
+# Optional: For CLI Provider
+# npm install -g @anthropic-ai/claude-code
 ```
 
-> **⚠️ Claude Code Version Compatibility**
+> **💡 Provider Choice**
 >
-> Starting from Claude Code v2.1.75, the `--permission-mode auto` flag has restricted tool usage permissions. Buuo now supports `allowedTools` configuration for fine-grained tool control:
->
-> ```yaml
-> providers:
->   claude-code-provider:
->     - id: claude-code
->       allowedTools:
->         - Read, Write, Edit, Grep, Glob
->         - Bash(python3:*), Bash(git:*)
->         - mcp__*  # All MCP tools
-> ```
->
-> For full MCP tool functionality with newer Claude Code versions, configure the `allowedTools` list to explicitly enable required tools.
-
+> - **Agent SDK Provider** (default): Requires `ANTHROPIC_API_KEY` environment variable
+> - **CLI Provider** (optional): Requires local Claude Code CLI installation
 ## 🚀 Quick Start
 
 ### 1. Install Dependencies
@@ -113,6 +108,43 @@ Successful startup shows:
 ────────────────────────────────────────
 ```
 
+### 6. Configure MCP Servers (Optional)
+
+MCP (Model Context Protocol) servers extend Claude's capabilities with external tools.
+
+**Step 1: Create .mcp.json from template**
+```bash
+cp .mcp.json.example .mcp.json
+```
+
+**Step 2: Edit .mcp.json with your API keys**
+```json
+{
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"]
+    },
+    "jira": {
+      "command": "npx",
+      "args": ["-y", "jira-mcp"],
+      "env": {
+        "JIRA_INSTANCE_URL": "https://your-domain.atlassian.net",
+        "JIRA_API_KEY": "your-api-key",
+        "JIRA_USER_EMAIL": "your-email@example.com"
+      }
+    }
+  }
+}
+```
+
+**Step 3: Restart gateway**
+```bash
+./scripts/start-gateway.sh restart
+```
+
+**Available MCP Servers:** See `.mcp.json.example` for full list including Context7, Jira, Sequential-thinking, Magic, and more.
+
 ## 💬 Chat Commands
 
 Buuo supports the following commands in Feishu/Lark:
@@ -135,60 +167,13 @@ Model settings are per-session, meaning different conversations can use differen
 
 Buuo supports fine-grained tool access control through the `allowedTools` configuration. This allows you to restrict which tools Claude Code can use.
 
-### Tool Categories
-
-| Category | Tools | Description |
-|----------|-------|-------------|
-| File Operations | `Read`, `Write`, `Edit` | File read, write, and edit operations |
-| Search | `Grep`, `Glob` | Content search and file pattern matching |
-| Interaction | `AskUserQuestion` | User interaction prompts |
-| Scripting | `Bash(python3:*)`, `Bash(git:*)` | Python scripts and Git operations |
-| MCP Tools | `mcp__*` | All MCP tools (Context7, Jira, etc.) |
-
 ### Example Configurations
 
-**Conservative (Read-only + MCP):**
-```yaml
-allowedTools:
-  - Read
-  - Grep
-  - Glob
-  - AskUserQuestion
-  - mcp__*
-```
+**Conservative (Read-only):** `Read`, `Grep`, `Glob`, `AskUserQuestion`
 
-**Standard (File operations + MCP):**
-```yaml
-allowedTools:
-  - Read
-  - Write
-  - Edit
-  - Grep
-  - Glob
-  - AskUserQuestion
-  - mcp__*
-```
+**Standard (File operations):** `Read`, `Write`, `Edit`, `Grep`, `Glob`, `Bash`, `AskUserQuestion`
 
-**Full (All tools including scripting):**
-```yaml
-allowedTools:
-  - Read
-  - Write
-  - Edit
-  - Grep
-  - Glob
-  - AskUserQuestion
-  - Bash(python3:*)
-  - Bash(git:*)
-  - mcp__context7__*
-  - mcp__jira__*
-  - mcp__sequential-thinking__*
-  - mcp__magic__*
-  - mcp__web_reader__*
-  - mcp__4_5v_mcp__*
-  - mcp__zai-mcp-server__*
-  - mcp__zread__*
-```
+**Full (All tools including MCP):** All tools above plus `mcp__context7__*`, `mcp__jira__*`, `mcp__sequential-thinking__*`, `mcp__magic__*`, etc.
 
 ### MCP Tool Reference
 
@@ -208,50 +193,55 @@ allowedTools:
 Configuration file: `config/default.config.yaml`
 
 ```yaml
-# Gateway Configuration
 gateway:
   id: main_gateway
 
-# Session Configuration
 session:
-  maxHistory: 50              # Maximum messages per session (default: 100 if not specified)
+  maxHistory: 50
 
-# Router Configuration
 router:
-  defaultProvider: claude-code
+  defaultProvider: agent-sdk
   systemPrompt: |
     You are a helpful AI assistant answering questions in Chinese.
   maxTokens: 4096
 
-# Claude Code Provider
 providers:
   claude-code-provider:
+    # CLI Provider (optional, disabled by default)
     - id: claude-code
-      enabled: true
-      workingDirectory: /root/opendev    # Auto-created if not exists
+      providerType: cli
+      workingDirectory: /root/opendev
       enableTools: true
-      requestTimeout: 300000     # Request timeout (5 minutes)
-      # Allowed tools (optional whitelist)
-      # If not specified, all tools are available (subject to permission-mode)
+      requestTimeout: 300000
       allowedTools:
-        - Read              # File read operations
-        - Write             # File write operations
-        - Edit              # File edit operations
-        - Grep              # Content search
-        - Glob              # File pattern matching
-        - AskUserQuestion   # User interaction
-        - Bash(python3:*)   # Python scripts (for skills)
-        - Bash(git:*)       # Git operations
-        - mcp__context7__*  # Documentation lookup
-        - mcp__jira__*      # Jira integration
-        - mcp__sequential-thinking__*  # Complex reasoning
-        - mcp__magic__*     # UI component generation
-        - mcp__web_reader__* # Web content fetching
-        - mcp__4_5v_mcp__*  # Image analysis
-        - mcp__zai-mcp-server__*  # Image/video analysis
-        - mcp__zread__*     # GitHub repo access
+        - Read
+        - Write
+        - Edit
+        - Grep
+        - Glob
+        - Bash(python3:*)
+        - Bash(git:*)
+        - mcp__context7__*
+        - mcp__jira__*
 
-# Feishu/Lark Channel
+    # Agent SDK Provider (default)
+    - id: agent-sdk
+      providerType: agent-sdk
+      model: default
+      workingDirectory: /root/opendev
+      requestTimeout: 300000
+      enableFileCheckpointing: false
+      allowedTools:
+        - Read
+        - Write
+        - Edit
+        - Grep
+        - Glob
+        - Bash
+        - WebSearch
+        - mcp__context7__*
+        - mcp__jira__*
+
 channels:
   lark-channel:
     - token: ${LARK_APP_ID}
@@ -259,6 +249,17 @@ channels:
       options:
         appSecret: ${LARK_APP_SECRET}
 ```
+
+### Switching Providers
+
+Edit `config/default.config.yaml`:
+
+```yaml
+router:
+  defaultProvider: agent-sdk  # or 'claude-code'
+```
+
+Restart: `./scripts/start-gateway.sh restart`
 
 ## 🔧 Development
 
@@ -282,9 +283,9 @@ Feishu Message → Lark Channel → Gateway → Session Manager
                                               ↓
                                          Message Router
                                               ↓
-                                     Claude Code Provider
+                                     Agent SDK Provider (default)
                                               ↓
-                                  (Resume Mode - 90%+ Token Savings)
+                                  (Native streaming with MCP support)
                                               ↓
                                          Response Stream
                                               ↓
@@ -293,29 +294,29 @@ Feishu Message → Lark Channel → Gateway → Session Manager
                                          Feishu User
 ```
 
+**Alternative Provider:** CLI Provider available (requires local Claude Code CLI)
+
 ### Key Design Decisions
 
-- **Resume Mode**: Uses Claude Code's `--resume` functionality for efficient context management
-  - First request: Creates new session with `--session-id`
-  - Subsequent requests: Uses `--resume` with cached session ID
-  - Claude Code manages disk-based history automatically
-  - Only sends current message (90%+ token savings)
+- **Provider Abstraction**: Unified interface supporting multiple AI backends
+  - Agent SDK Provider: Direct API integration with native streaming
+  - CLI Provider: Local Claude Code CLI with resume mode
 
-- **Memory Management**: LRU caches prevent unbounded growth
-  - Message ID cache: 1000 entries, auto-evicts oldest
-  - Conversation channel: 1000 entries, auto-evicts oldest
+- **MCP Integration**: External tools via Model Context Protocol
+  - Configure servers in `.mcp.json` (auto-loaded from buuo directory)
+  - Tool access control via `allowedTools` (e.g., `mcp__context7__*`)
+
+- **Memory Management**: Automatic cleanup prevents unbounded growth
   - Session expiry: 24h TTL with 5min cleanup interval
+  - Per-session caching with automatic eviction
 
 - **Concurrency Safety**: Per-conversation locks prevent race conditions
   - Each conversation has its own processing lock
-  - Concurrent messages for same conversation are serialized
-  - Prevents session corruption and duplicate responses
+  - Concurrent messages are serialized
 
 - **Error Resilience**: Comprehensive error handling and cleanup
-  - Timer cleanup with try-finally pattern
-  - Process cleanup on timeout/error
+  - try-finally patterns for resource cleanup
   - Automatic session expiry and cleanup
-  - Auto-create working directory if not found
 
 ## 📁 Project Structure
 

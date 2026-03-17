@@ -1,0 +1,58 @@
+{
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"],
+      "env": {}
+    },
+    "morphllm-fast-apply": {
+      "command": "npx",
+      "args": ["-y", "@morph-llm/morph-fast-apply"],
+      "env": {}
+    },
+    "magic": {
+      "command": "npx",
+      "args": ["-y", "@21st-dev/magic"],
+      "env": {}
+    },
+    "zai-mcp-server": {
+      "command": "npx",
+      "args": ["-y", "@z_ai/mcp-server"],
+      "env": {
+        "Z_AI_API_KEY": "your-zhipu-api-key",
+        "Z_AI_MODE": "ZHIPU"
+      }
+    },
+    "zread": {
+      "type": "http",
+      "url": "https://open.bigmodel.cn/api/mcp/zread/mcp",
+      "headers": {
+        "Authorization": "your-api-key-here"
+      }
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "env": {}
+    },
+    "jira": {
+      "command": "npx",
+      "args": ["-y", "jira-mcp"],
+      "env": {
+        "JIRA_INSTANCE_URL": "https://your-domain.atlassian.net",
+        "JIRA_API_KEY": "your-api-key-here",
+        "JIRA_USER_EMAIL": "your-email@example.com"
+      }
+    },
+    "web-reader": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-web-reader"]
+    },
+    "4_5v_mcp": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@4_5v/mcp"]
+    }
+  }
+}

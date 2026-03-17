@@ -1,6 +1,6 @@
 {
   "name": "buuo",
-  "version": "1.0.1",
+  "version": "2.0.1",
   "description": "Buuo - Claude Code local integration with Lark/Feishu",
   "private": true,
   "type": "module",

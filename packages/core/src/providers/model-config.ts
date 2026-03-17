@@ -40,3 +40,40 @@ export function isValidModelAlias(alias: string): boolean {
 export function getModelId(alias: string): string | undefined {
   return MODEL_ALIASES[alias.toLowerCase()];
 }
+
+/**
+ * Map model full ID back to alias
+ * Used by providers that need aliases (e.g., Agent SDK) to read from settings.json
+ */
+export function getModelAlias(modelId: string): string {
+  // If already an alias, return as is
+  const lowerModel = modelId.toLowerCase();
+  if (['default', 'haiku', 'sonnet', 'opus'].includes(lowerModel)) {
+    return lowerModel;
+  }
+
+  // Reverse mapping from full ID to alias
+  const ID_TO_ALIAS: Record<string, string> = {
+    'claude-sonnet-4-6': 'sonnet',
+    'claude-haiku-4-20250114': 'haiku',
+    'claude-opus-4-6': 'opus',
+    'claude-sonnet-4-20250514': 'sonnet',
+    'claude-opus-4-20250514': 'opus',
+  };
+
+  return ID_TO_ALIAS[modelId] || modelId;
+}
+
+/**
+ * Get the appropriate model value for a specific provider type
+ * - CLI provider: needs full model ID
+ * - Agent SDK provider: needs alias to read from settings.json
+ */
+export function getModelForProvider(model: string, providerType?: string): string {
+  // Agent SDK provider uses alias to read from settings.json
+  if (providerType === 'agent-sdk') {
+    return getModelAlias(model);
+  }
+  // CLI and other providers use full model ID
+  return getModelId(model) || model;
+}

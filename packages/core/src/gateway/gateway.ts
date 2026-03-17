@@ -539,11 +539,10 @@ export class Gateway extends EventEmitter {
 
     // Get or create session and update model setting
     const session = await this.sessions.getOrCreate(message);
-    const modelId = MODEL_ALIASES[normalizedAlias];
     const displayName = MODEL_DISPLAY_NAMES[normalizedAlias];
 
-    // Update session model (simple approach - just update the setting)
-    session.data.model = modelId;
+    // Update session model with alias (router will convert to appropriate value for each provider)
+    session.data.model = normalizedAlias;
     session.lastActivity = new Date();
 
     await channel.sendMessage({
@@ -551,7 +550,7 @@ export class Gateway extends EventEmitter {
       content: `✅ 模型已切换为: **${displayName}**\n\n当前会话将使用新模型。`
     });
 
-    this.logger?.info(`Model switched for session ${session.id}: ${displayName} (${modelId})`);
+    this.logger?.info(`Model switched for session ${session.id}: ${displayName} (${normalizedAlias})`);
   }
 
   /**

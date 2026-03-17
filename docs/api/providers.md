@@ -1,202 +1,180 @@
 # Provider API Documentation
 
-Buuo provider system supports multiple AI models with unified conversational interface.
+Buuo provider system supports multiple AI backends with unified conversational interface.
 
 ---
 
-## Provider Interface
+## Available Providers
 
-### `AIProvider`
+### 1. CLI Provider (`claude-code`)
 
-Base interface that all providers must implement.
-
-```typescript
-interface AIProvider {
-  /** Provider ID */
-  id: string;
-
-  /** Provider name */
-  name: string;
-
-  /** Initialize provider */
-  initialize(config: ProviderConfig): Promise<void>;
-
-  /** Send chat request */
-  chat(request: ChatRequest): Promise<ChatResponse>;
-
-  /** Stream chat */
-  chatStream(request: ChatRequest): AsyncIterable<ChatResponse>;
-
-  /** Estimate token count */
-  estimateTokens(text: string): number;
-}
-```
-
----
-
-## Request and Response
-
-### `ChatRequest`
-
-Chat request structure:
-
-```typescript
-interface ChatRequest {
-  /** Session ID */
-  sessionId: string;
-
-  /** Message history */
-  messages: ChatMessage[];
-
-  /** System prompt */
-  systemPrompt?: string;
-
-  /** Temperature parameter (0-1) */
-  temperature?: number;
-
-  /** Max tokens */
-  maxTokens?: number;
-
-  /** Tool definitions */
-  tools?: ToolDefinition[];
-}
-```
-
-### `ChatMessage`
-
-```typescript
-interface ChatMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
-  toolCalls?: ToolCall[];
-  toolId?: string;
-}
-```
-
-### `ChatResponse`
-
-```typescript
-interface ChatResponse {
-  /** Content */
-  content?: string;
-
-  /** Tool calls */
-  toolCalls?: ToolCall[];
-
-  /** Usage statistics */
-  usage?: {
-    promptTokens: number;
-    completionTokens: number;
-    totalTokens: number;
-  };
-
-  /** Is done */
-  done: boolean;
-}
-```
-
----
-
-## Built-in Provider
-
-### Claude Code Provider
-
-Uses local Claude Code CLI with automatic working directory creation:
-
-```typescript
-import { ClaudeCodeProvider } from '@buuo/provider-claude-code';
-
-const provider = new ClaudeCodeProvider({
-  id: 'claude-code-local'
-});
-
-await provider.initialize({
-  workingDirectory: '/root/opendev',  // Auto-created if not exists
-  enableTools: true
-});
-
-// Stream chat
-for await (const response of provider.chatStream(request)) {
-  if (response.content) {
-    process.stdout.write(response.content);
-  }
-  if (response.done) {
-    console.log('\n[Done]');
-  }
-}
-```
+Uses local Claude Code CLI installation.
 
 **Features:**
-- Resume Mode: Uses Claude Code `--resume` for 90%+ token savings
-- Auto-creates working directory if not found
-- Session expiry: 24h TTL with 5min cleanup interval
-- Tool access: Full support for Claude Code tool calling
+- Resume Mode: Uses `--resume` for 90%+ token savings
+- Disk-based session management (CLI managed)
+- Full Claude Code tool access
+- No API key required
 
----
+**Configuration:**
+```yaml
+- id: claude-code
+  enabled: true
+  providerType: cli
+  workingDirectory: /path/to/workspace
+  enableTools: true
+  requestTimeout: 300000
+  allowedTools:
+    - Read
+    - Write
+    - Edit
+    - Grep
+    - Glob
+    - Bash(python3:*)
+    - Bash(git:*)
+    - mcp__*
+```
 
-## Provider Configuration
+### 2. Agent SDK Provider (`agent-sdk`) - Default
 
-### `ProviderConfig`
+Uses Anthropic Agent SDK for direct API integration.
 
-```typescript
-interface ProviderConfig {
-  /** Working directory */
-  workingDirectory?: string;
+**Features:**
+- Native streaming API
+- Automatic agent loop handling
+- SDK-managed session persistence
+- Built-in MCP server support via `.mcp.json`
+- Requires `ANTHROPIC_API_KEY`
 
-  /** Enable tool access */
-  enableTools?: boolean;
+**Configuration:**
+```yaml
+- id: agent-sdk
+  enabled: true
+  providerType: agent-sdk
+  model: default  # or 'haiku', 'sonnet', 'opus'
+  workingDirectory: /path/to/workspace
+  requestTimeout: 300000
+  enableFileCheckpointing: false
+  allowedTools:
+    - Read
+    - Write
+    - Edit
+    - Grep
+    - Glob
+    - Bash
+    - mcp__context7__*
+    - mcp__jira__*
+```
 
-  /** Request timeout (ms) */
-  requestTimeout?: number;
+**MCP Configuration:**
+Create `.mcp.json` in buuo directory:
+```json
+{
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"]
+    },
+    "jira": {
+      "command": "npx",
+      "args": ["-y", "jira-mcp"],
+      "env": {
+        "JIRA_INSTANCE_URL": "https://your-domain.atlassian.net",
+        "JIRA_API_KEY": "your-api-key"
+      }
+    }
+  }
 }
 ```
 
 ---
 
-## Creating Custom Providers
+## Provider Configuration Reference
 
-```typescript
-import type { AIProvider } from '@buuo/core';
+### Common Options
 
-export class MyProvider implements AIProvider {
-  id = 'my-provider';
-  name = 'My Custom AI Provider';
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `id` | string | required | Unique provider identifier |
+| `enabled` | boolean | true | Whether provider is active |
+| `providerType` | string | required | `cli` or `agent-sdk` |
+| `workingDirectory` | string | `process.cwd()` | Task execution directory |
+| `requestTimeout` | number | 300000 | Request timeout in milliseconds |
+| `allowedTools` | string[] | undefined | Tool whitelist |
 
-  async initialize(config: ProviderConfig): Promise<void> {
-    // Initialize logic
-  }
+### Agent SDK Specific Options
 
-  async chat(request: ChatRequest): Promise<ChatResponse> {
-    // Send request
-    // Return response
-    return {
-      content: 'Hello!',
-      done: true
-    };
-  }
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `model` | string | `default` | Model: `default`, `haiku`, `sonnet`, `opus` |
+| `enableFileCheckpointing` | boolean | false | Enable file checkpoint feature |
 
-  async *chatStream(request: ChatRequest): AsyncIterable<ChatResponse> {
-    // Implement stream chat
-    yield {
-      content: 'Hello!',
-      done: true
-    };
-  }
+### CLI Provider Specific Options
 
-  estimateTokens(text: string): number {
-    // Simple estimate: 4 chars ≈ 1 token
-    return Math.ceil(text.length / 4);
-  }
-}
-```
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `enableTools` | boolean | true | Enable Claude Code tool access |
 
 ---
 
-## Supported Models
+## Tool Access Control
 
-### Claude Code CLI
+### Tool Naming Patterns
 
-Uses local installation with full tool access support.
+| Pattern | Description |
+|---------|-------------|
+| `Read`, `Write`, `Edit` | File operations |
+| `Grep`, `Glob` | Search operations |
+| `Bash` | Command execution |
+| `Bash(python3:*)` | Python scripts (pattern) |
+| `Bash(git:*)` | Git operations (pattern) |
+| `mcp__<server>__*` | All tools from MCP server |
+| `mcp__context7__query` | Specific MCP tool |
+
+### MCP Tool Reference
+
+| MCP Tool | Description |
+|----------|-------------|
+| `mcp__context7__*` | Official library documentation |
+| `mcp__jira__*` | Jira issue tracking |
+| `mcp__sequential-thinking__*` | Multi-step reasoning |
+| `mcp__magic__*` | UI component generation |
+| `mcp__web_reader__*` | Web content fetching |
+| `mcp__4_5v_mcp__*` | Image analysis |
+| `mcp__zai-mcp-server__*` | Image/video analysis |
+| `mcp__zread__*` | GitHub repository access |
+
+---
+
+## Switching Providers
+
+### Enable CLI Provider
+```yaml
+router:
+  defaultProvider: claude-code
+
+providers:
+  claude-code-provider:
+    - id: claude-code
+      enabled: true
+      providerType: cli
+    - id: agent-sdk
+      enabled: false
+```
+
+### Enable Agent SDK Provider (Default)
+```yaml
+router:
+  defaultProvider: agent-sdk
+
+providers:
+  claude-code-provider:
+    - id: claude-code
+      enabled: false
+    - id: agent-sdk
+      enabled: true
+      providerType: agent-sdk
+```
 
 ---
 
@@ -204,3 +182,4 @@ Uses local installation with full tool access support.
 
 - [Channels API](./channels.md)
 - [Plugins API](./plugins.md)
+- [README](../README.md)

@@ -1,5 +1,5 @@
-# Buuo Gateway Configuration
-# Simplified configuration for Claude Code + Lark integration
+# Buuo Gateway Configuration v2.0
+# Agent SDK Provider with MCP auto-loading from .mcp.json
 
 gateway:
   id: main_gateway
@@ -8,7 +8,7 @@ session:
   maxHistory: 50
 
 router:
-  defaultProvider: claude-code
+  defaultProvider: agent-sdk
   systemPrompt: |
     You are a helpful AI assistant answering questions in Chinese.
   maxTokens: 4096
@@ -21,16 +21,15 @@ channels:
       options:
         appSecret: ${LARK_APP_SECRET}
 
-# Claude Code Provider Configuration (Resume Mode)
+# Provider Configuration
 providers:
   claude-code-provider:
+    # CLI-based Provider (Resume Mode)
     - id: claude-code
-      enabled: true
-      workingDirectory: /root/opendev    # Default: /root/opendev
+      providerType: cli
+      workingDirectory: /root/opendev
       enableTools: true
       requestTimeout: 300000
-      # Allowed tools for Claude Code (whitelist mode)
-      # These tools will be passed via --allowed-tools flag
       allowedTools:
         - Read
         - Write
@@ -38,8 +37,39 @@ providers:
         - Grep
         - Glob
         - AskUserQuestion
-        - Bash(python3:*)    # Required for skills that run Python scripts
-        - Bash(git:*)        # Git operations
+        - Bash(python3:*)
+        - Bash(git:*)
+        - WebSearch
+        - mcp__context7__*
+        - mcp__jira__*
+        - mcp__sequential-thinking__*
+        - mcp__magic__*
+        - mcp__web_reader__*
+        - mcp__4_5v_mcp__*
+        - mcp__zai-mcp-server__*
+        - mcp__zread__*
+
+    # Agent SDK Provider (Default)
+    # workingDirectory: Where Agent SDK executes tasks (reads/writes files)
+    # .mcp.json: Loaded from buuo project directory (contains MCP server configs)
+    - id: agent-sdk
+      providerType: agent-sdk
+      model: default
+      workingDirectory: /root/opendev
+      requestTimeout: 300000
+      enableFileCheckpointing: false
+      # Copy .mcp.json.example to .mcp.json and configure your MCP servers
+      allowedTools:
+        - Read
+        - Write
+        - Edit
+        - Grep
+        - Glob
+        - Bash
+        - Bash(python3:*)
+        - Bash(git:*)
+        - WebSearch
+        - AskUserQuestion
         - mcp__context7__*
         - mcp__jira__*
         - mcp__sequential-thinking__*

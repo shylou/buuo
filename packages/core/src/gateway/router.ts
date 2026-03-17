@@ -8,6 +8,7 @@ import type { AIProvider, ChatRequest, ChatResponse } from '../providers/index.j
 import type { Session } from './session.js';
 import type { IncomingMessage } from '../channels/index.js';
 import type { Logger } from '../utils/logger.js';
+import { getModelForProvider } from '../providers/model-config.js';
 
 /** LRU Cache for conversation to channel mappings */
 class LRUCache<K, V> {
@@ -128,8 +129,21 @@ export class MessageRouter {
     this.conversationChannel.set(message.conversationId, message.metadata?.channelId as string);
 
     // Get provider
-    const providerId = session.data.providerId as string ?? this.options.defaultProvider ?? 'default';
-    const provider = this.providerMap.get(providerId);
+    let providerId = session.data.providerId as string ?? this.options.defaultProvider ?? 'default';
+    let provider = this.providerMap.get(providerId);
+
+    // If provider not found, try default provider
+    if (!provider && providerId !== 'default') {
+      providerId = this.options.defaultProvider ?? 'default';
+      provider = this.providerMap.get(providerId);
+    }
+
+    if (!provider) {
+      throw new Error(`Provider not found: ${providerId}`);
+    }
+
+    // Store providerId in session for /cancel command
+    session.data.providerId = providerId;
 
     if (!provider) {
       throw new Error(`Provider not found: ${providerId}`);
@@ -145,13 +159,14 @@ export class MessageRouter {
     }];
 
     // Build chat request
+    const model = session.data.model as string || 'default';
     const request: ChatRequest = {
       sessionId: session.id,
       messages: messages,
       systemPrompt: session.data.systemPrompt as string ?? this.options.systemPrompt,
       temperature: session.data.temperature as number ?? this.options.temperature ?? 0.7,
       maxTokens: session.data.maxTokens as number ?? this.options.maxTokens ?? 4096,
-      model: session.data.model as string
+      model: getModelForProvider(model, provider.id)
     };
 
     // Route to provider

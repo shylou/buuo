@@ -5,9 +5,41 @@ All notable changes to Buuo will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - 2026-03-17
+
+### Breaking Changes
+- **Agent SDK Provider is now the default provider** (previously CLI provider)
+- **MCP configuration via `.mcp.json`** - MCP servers must be configured in `.mcp.json` file in buuo directory
+
+### Added
+- **Automatic MCP server loading** from `.mcp.json` using `settingSources: ['user', 'project']`
+- **`.mcp.json.example` template** - Example configuration for MCP servers with documentation
+- **Enhanced MCP tool access control** - Individual MCP tools can be allowed via `allowedTools` (e.g., `mcp__context7__*`)
+
+### Migration Guide
+
+**From v1.x to v2.0.1:**
+
+1. **Create `.mcp.json` from template:**
+   ```bash
+   cp .mcp.json.example .mcp.json
+   # Edit .mcp.json with your API keys
+   ```
+
+2. **Verify MCP tools:**
+   - MCP tools follow naming pattern: `mcp__<server-name>__<tool-name>`
+   - Add to `allowedTools`: `mcp__context7__*`, `mcp__jira__*`, etc.
+
 ## [Unreleased]
 
 ### Added
+- **Agent SDK Provider** as alternative to CLI provider
+  - Uses Anthropic Agent SDK for simpler, more direct integration
+  - Native streaming API with automatic agent loop handling
+  - Session persistence managed by SDK
+  - Supports `claude_code` preset for full tool access
+  - Requires `ANTHROPIC_API_KEY` environment variable
+- **Provider type selection** via `providerType` configuration (`cli` or `agent-sdk`)
 - **allowedTools configuration** for Claude Code provider to control tool access
   - Support for whitelisting specific tools (Read, Write, Edit, Grep, Glob, etc.)
   - Support for Bash patterns (e.g., `Bash(python3:*)` for skills, `Bash(git:*)` for git)
