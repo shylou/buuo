@@ -70,8 +70,8 @@ export class Gateway extends EventEmitter {
   private readonly id: string;
   private _running = false;
   private _startTime?: Date;
-  private readonly channelConfigs = new Map<string, object>(); // Store channel configs
-  private readonly providerConfigs = new Map<string, object>(); // Store provider configs
+  private readonly channelConfigs = new Map<string, object>();
+  private readonly providerConfigs = new Map<string, object>();
 
   /** Per-conversation locks to prevent concurrent processing */
   private readonly conversationLocks = new Map<string, Promise<void>>();
@@ -79,14 +79,20 @@ export class Gateway extends EventEmitter {
   /** /model command regex: matches /model or /model <alias> */
   private readonly MODEL_COMMAND_REGEX = /^\s*\/model\s*(\S*)\s*$/i;
 
+  /** /cancel command regex: matches /cancel */
+  private readonly CANCEL_COMMAND_REGEX = /^\s*\/cancel\s*$/i;
+
+  /** Message templates */
+  private readonly MESSAGES = {
+    NO_ACTIVE_REQUEST: 'No active request to cancel.',
+    NO_AVAILABLE_PROVIDER: 'No available AI provider.',
+    PROVIDER_NOT_SUPPORTED: 'This AI provider does not support cancel.',
+    REQUEST_CANCELLED: 'Request cancelled. Current request terminated, session context preserved.',
+    THINKING_INDICATOR: (elapsed: string) => `🤔 **Thinking...** (${elapsed}s)`
+  } as const;
+
   public readonly sessions: SessionManager;
   public readonly router: MessageRouter;
-
-  // Unified logging function with millisecond timestamps
-  private log = (...args: unknown[]) => {
-    const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 23);
-    console.log(`[${timestamp}]`, ...args);
-  };
 
   constructor(
     private readonly config: GatewayConfig = {},
@@ -218,9 +224,7 @@ export class Gateway extends EventEmitter {
     }
 
     // Check for /cancel command (before locking to allow cancellation)
-    // Case-insensitive match for /cancel with optional surrounding whitespace
-    const cancelCommandRegex = /^\s*\/cancel\s*$/i;
-    if (cancelCommandRegex.test(message.content)) {
+    if (this.CANCEL_COMMAND_REGEX.test(message.content)) {
       await this.handleCancelCommand(message);
       return;
     }
@@ -253,28 +257,40 @@ export class Gateway extends EventEmitter {
     const thinkingEvents: string[] = [];
     let immediateUpdateTimer: NodeJS.Timeout | undefined = undefined;
 
+    // Get channel once at the beginning (cached for error handling)
+    const channelId = message.metadata?.channelId as string;
+    const channel = this.router.getChannel(channelId);
+
     try {
-      this.log('[Gateway] handleMessage called:', message.id);
-      this.log('[Gateway] User message:', message.content);
+      this.logger.debug('[Gateway] Handling message', {
+        messageId: message.id,
+        conversationId: message.conversationId,
+        contentLength: message.content.length
+      });
+
+      this.logger.debug('[Gateway] User message', {
+        content: message.content.substring(0, 100) // Truncate for logging
+      });
       this.emit('message:incoming', message);
 
-      // Get or create session
-      const session = await this.sessions.getOrCreate(message);
-      this.log('[Gateway] Session:', session.id);
-
-      // Get channel from metadata
-      const channelId = message.metadata?.channelId as string;
-      const channel = this.router.getChannel(channelId);
+      // Validate channel exists early
       if (!channel) {
         throw new Error(`No channel found for: ${channelId}`);
       }
 
+      // Get or create session
+      const session = await this.sessions.getOrCreate(message);
+      this.logger.debug('[Gateway] Session created', {
+        sessionId: session.id,
+        conversationId: message.conversationId
+      });
+
       // Route to provider FIRST (to start processing immediately)
-      this.log('[Gateway] Routing to provider...');
+      this.logger.debug('[Gateway] Routing to provider');
       const startTime = Date.now();
 
       const responses = await this.router.route(session, message);
-      this.log('[Gateway] Got response stream');
+      this.logger.debug('[Gateway] Got response stream');
 
       // Send "thinking" indicator AFTER getting stream (immediate user feedback)
       if (channel.updateMessage) {
@@ -327,12 +343,18 @@ export class Gateway extends EventEmitter {
 
           if (response.done) {
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-            this.log(`[Gateway] Complete: ${chunkCount} chunks, ${assistantContent.length} chars, ${elapsed}s`);
+            this.logger.debug('[Gateway] Response complete', {
+              chunkCount,
+              contentLength: assistantContent.length,
+              elapsedSeconds: elapsed
+            });
 
             // Send final response
             if (progressMessageId && channel.updateMessage) {
               channel.updateMessage(progressMessageId, assistantContent, message.conversationId)
-                .catch((err) => this.logger?.warn(`Failed to update final message: ${err}`));
+                .catch((err) => this.logger?.warn('Failed to update final message', {
+                  error: err instanceof Error ? err.message : String(err)
+                }));
             } else {
               await channel.sendMessage({
                 conversationId: message.conversationId,
@@ -360,10 +382,7 @@ export class Gateway extends EventEmitter {
         }
       }
     } catch (error) {
-
-      // Send error message to Feishu
-      const channelId = message.metadata?.channelId as string;
-      const channel = this.router.getChannel(channelId);
+      // Send error message using cached channel reference
       const errorMessage = `❌ **Error:** ${error instanceof Error ? error.message : 'Unknown error'}`;
 
       if (channel) {
@@ -379,8 +398,14 @@ export class Gateway extends EventEmitter {
         }
       }
 
-      this.log('[Gateway] Failed to handle message:', error);
-      this.logger.error(`Failed to handle message: ${error}`);
+      this.logger.error('[Gateway] Failed to handle message', {
+        messageId: message.id,
+        conversationId: message.conversationId,
+        error: error instanceof Error ? {
+          message: error.message,
+          stack: error.stack
+        } : String(error)
+      });
       this.emit('message:error', { message, error });
       throw error;
     }
@@ -418,27 +443,56 @@ export class Gateway extends EventEmitter {
   }
 
   /**
+   * Helper method to send message through channel with error handling
+   */
+  private async sendChannelMessage(
+    channel: Channel,
+    conversationId: string,
+    content: string,
+    updateMessageId?: string
+  ): Promise<void> {
+    if (!channel) {
+      this.logger.warn('Cannot send message: no channel provided');
+      return;
+    }
+
+    try {
+      if (updateMessageId && channel.updateMessage) {
+        await channel.updateMessage(updateMessageId, content);
+      } else {
+        await channel.sendMessage({ conversationId, content });
+      }
+    } catch (error) {
+      this.logger.error('Failed to send channel message', {
+        conversationId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  /**
    * Handle /cancel command - terminate active request for a conversation
    */
   private async handleCancelCommand(message: IncomingMessage): Promise<void> {
-    this.log('[Gateway] Handling /cancel command for conversation:', message.conversationId);
+    this.logger.debug('[Gateway] Handling /cancel command', {
+      conversationId: message.conversationId
+    });
 
     // Get channel from metadata
     const channelId = message.metadata?.channelId as string;
     const channel = this.router.getChannel(channelId);
     if (!channel) {
-      this.log('[Gateway] No channel found for cancel command:', channelId);
+      this.logger.warn('[Gateway] No channel found for cancel command', { channelId });
       return;
     }
 
     // Get session (conversationId = sessionId in our system)
     const session = this.sessions.getByConversation(message.conversationId);
     if (!session) {
-      await channel.sendMessage({
-        conversationId: message.conversationId,
-        content: '没有活动的请求可以取消。'
+      await this.sendChannelMessage(channel, message.conversationId, this.MESSAGES.NO_ACTIVE_REQUEST);
+      this.logger.debug('[Gateway] No session found for cancel', {
+        conversationId: message.conversationId
       });
-      this.log('[Gateway] No session found for cancel command:', message.conversationId);
       return;
     }
 
@@ -450,44 +504,39 @@ export class Gateway extends EventEmitter {
     if (!provider) {
       const providers = this.router.getProviders();
       provider = providers.find(p => typeof (p as any).cancelRequest === 'function');
-      this.log('[Gateway] Session has no providerId, using fallback provider:', provider?.id || 'none');
+      this.logger.debug('[Gateway] Using fallback provider', {
+        providerId: provider?.id || 'none',
+        sessionId: session.id
+      });
     }
 
     if (!provider) {
-      await channel.sendMessage({
-        conversationId: message.conversationId,
-        content: '没有可用的 AI 提供器。'
+      await this.sendChannelMessage(channel, message.conversationId, this.MESSAGES.NO_AVAILABLE_PROVIDER);
+      this.logger.warn('[Gateway] No provider available for cancel', {
+        sessionId: session.id
       });
-      this.log('[Gateway] No provider available for cancel');
       return;
     }
 
     // Check if provider supports cancel operation
     if (typeof (provider as any).cancelRequest !== 'function') {
-      await channel.sendMessage({
-        conversationId: message.conversationId,
-        content: '此 AI 提供器不支持取消请求。'
+      await this.sendChannelMessage(channel, message.conversationId, this.MESSAGES.PROVIDER_NOT_SUPPORTED);
+      this.logger.debug('[Gateway] Provider does not support cancel', {
+        providerId: provider.id
       });
-      this.log('[Gateway] Provider does not support cancel:', provider.id);
       return;
     }
 
     // Attempt cancellation
     const cancelled = (provider as any).cancelRequest(session.id);
-    this.log('[Gateway] Cancel result for session', session.id, ':', cancelled);
+    this.logger.debug('[Gateway] Cancel result', {
+      sessionId: session.id,
+      cancelled
+    });
 
     // Send response message
-    if (cancelled) {
-      await channel.sendMessage({
-        conversationId: message.conversationId,
-        content: '请求已取消。当前请求已终止，会话上下文已保留。'
-      });
-    } else {
-      await channel.sendMessage({
-        conversationId: message.conversationId,
-        content: '没有活动的请求可以取消。'
-      });
-    }
+    const responseContent = cancelled ? this.MESSAGES.REQUEST_CANCELLED : this.MESSAGES.NO_ACTIVE_REQUEST;
+    await this.sendChannelMessage(channel, message.conversationId, responseContent);
   }
 
   /**
@@ -497,12 +546,12 @@ export class Gateway extends EventEmitter {
     message: IncomingMessage,
     modelAlias: string
   ): Promise<void> {
-    this.log('[Gateway] Handling /model command for conversation:', message.conversationId);
+    this.logger.debug('[Gateway] Handling /model command for conversation:', message.conversationId);
 
     const channelId = message.metadata?.channelId as string;
     const channel = this.router.getChannel(channelId);
     if (!channel) {
-      this.log('[Gateway] No channel found for model command:', channelId);
+      this.logger.debug('[Gateway] No channel found for model command:', channelId);
       return;
     }
 
@@ -617,51 +666,56 @@ export class Gateway extends EventEmitter {
   }
 
   /**
-   * Get gateway status (optimized with single pass)
+   * Get gateway status (optimized with functional reduce)
    */
   getStatus(): GatewayStatus {
     const plugins = this.plugins.list();
     const channels = this.router.getChannels();
     const providers = this.router.getProviders();
 
-    // Single pass for channels instead of multiple filter calls
-    let connectedChannels = 0;
-    for (const channel of channels) {
-      if (channel.getStatus().connected) connectedChannels++;
-    }
+    // Use reduce for single-pass calculations (functional approach)
+    const channelStats = channels.reduce(
+      (acc, ch) => ({
+        ...acc,
+        connected: acc.connected + (ch.getStatus().connected ? 1 : 0)
+      }),
+      { connected: 0 }
+    );
 
-    // Single pass for providers instead of multiple filter calls
-    let availableProviders = 0;
-    for (const provider of providers) {
-      if (provider.getStatus().available) availableProviders++;
-    }
+    const providerStats = providers.reduce(
+      (acc, pr) => ({
+        ...acc,
+        available: acc.available + (pr.getStatus().available ? 1 : 0)
+      }),
+      { available: 0 }
+    );
 
-    // Single pass for plugins
-    let loadedPlugins = 0;
-    let startedPlugins = 0;
-    for (const plugin of plugins) {
-      if (plugin.loaded) loadedPlugins++;
-      if (plugin.started) startedPlugins++;
-    }
+    const pluginStats = plugins.reduce(
+      (acc, pl) => ({
+        loaded: acc.loaded + (pl.loaded ? 1 : 0),
+        started: acc.started + (pl.started ? 1 : 0)
+      }),
+      { loaded: 0, started: 0 }
+    );
 
     return {
       id: this.id,
       running: this._running,
       channels: {
         total: channels.length,
-        connected: connectedChannels,
-        disconnected: channels.length - connectedChannels
+        connected: channelStats.connected,
+        disconnected: channels.length - channelStats.connected
       },
       providers: {
         total: providers.length,
-        available: availableProviders,
-        unavailable: providers.length - availableProviders
+        available: providerStats.available,
+        unavailable: providers.length - providerStats.available
       },
       sessions: this.sessions.getStats(),
       plugins: {
         total: plugins.length,
-        loaded: loadedPlugins,
-        started: startedPlugins
+        loaded: pluginStats.loaded,
+        started: pluginStats.started
       },
       uptime: this._startTime ? Date.now() - this._startTime.getTime() : undefined
     };

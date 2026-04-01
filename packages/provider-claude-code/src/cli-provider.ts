@@ -9,7 +9,6 @@
  */
 
 import { spawn, ChildProcess } from 'child_process';
-import { existsSync } from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import type {
   ProviderConfig,
@@ -17,6 +16,31 @@ import type {
   ChatResponse,
 } from '@buuo/core/providers';
 import { BaseProvider } from '@buuo/core/providers';
+
+/** CLI output message types (from --output-format stream-json) */
+interface CliMessage {
+  type: string;
+  message?: {
+    content?: CliContentItem[];
+  };
+  event?: {
+    type?: string;
+    content_block?: { type: string };
+    delta?: { type?: string; text?: string };
+    usage?: { input_tokens?: number; output_tokens?: number };
+  };
+  usage?: { input_tokens?: number; output_tokens?: number };
+  error?: string;
+  is_error?: boolean;
+}
+
+interface CliContentItem {
+  type: 'text' | 'tool_use' | 'thinking';
+  text?: string;
+  name?: string;
+  input?: unknown;
+  thinking?: string;
+}
 
 export interface ClaudeCodeConfig extends ProviderConfig {
   /** Path to claude CLI (default: 'claude') */
@@ -70,10 +94,8 @@ export class ClaudeCodeProvider extends BaseProvider {
     console.log(`[${timestamp}]`, '[ClaudeCode]', ...args);
   };
 
-  private readonly logDebug = (...args: unknown[]) => {
-    // Enable for debugging:
-    // const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 23);
-    // console.log(`[${timestamp}] [DEBUG]`, '[ClaudeCode]', ...args);
+  private readonly logDebug = (..._args: unknown[]) => {
+    // No-op in production. Replace with pino debug level when logger is integrated.
   };
 
   constructor(id: string = 'claude-code') {
@@ -94,15 +116,10 @@ export class ClaudeCodeProvider extends BaseProvider {
     if (config.requestTimeout !== undefined) this.requestTimeout = config.requestTimeout;
     if (config.allowedTools) this.allowedTools = config.allowedTools;
 
-    // Check and create working directory if needed
-    if (!existsSync(this.workingDirectory)) {
-      this.log(`Working directory not found: ${this.workingDirectory}`);
-      this.log(`Creating directory...`);
-
-      const fs = await import('node:fs/promises');
-      await fs.mkdir(this.workingDirectory, { recursive: true });
-      this.log(`Directory created: ${this.workingDirectory}`);
-    }
+    // Ensure working directory exists
+    const fs = await import('node:fs/promises');
+    await fs.mkdir(this.workingDirectory, { recursive: true });
+    this.log(`Working directory ready: ${this.workingDirectory}`);
 
     this._status = {
       available: true,
@@ -199,6 +216,7 @@ export class ClaudeCodeProvider extends BaseProvider {
 
     // Build current message only (no history)
     const currentMessage = this.buildCurrentMessage(request);
+    this.log(`User message: ${currentMessage.substring(0, 200)}${currentMessage.length > 200 ? '...' : ''}`);
 
     // Build CLI arguments
     const args = [
@@ -212,6 +230,11 @@ export class ClaudeCodeProvider extends BaseProvider {
     // Add model parameter if specified
     if (request.model) {
       args.push('--model', request.model);
+    }
+
+    // Add system prompt if provided
+    if (request.systemPrompt) {
+      args.push('--system-prompt', request.systemPrompt);
     }
 
     // Configure allowed tools
@@ -262,16 +285,16 @@ export class ClaudeCodeProvider extends BaseProvider {
   }
 
   /** Write message to process stdin and close */
-  private writeStdin(process: ChildProcess, message: string): void {
-    if (process.stdin) {
-      process.stdin.write(message);
-      process.stdin.end();
+  private writeStdin(child: ChildProcess, message: string): void {
+    if (child.stdin) {
+      child.stdin.write(message);
+      child.stdin.end();
     }
   }
 
   /** Stream response from child process */
   private async *streamResponse(
-    process: ChildProcess,
+    child: ChildProcess,
     sessionId: string
   ): AsyncIterable<ChatResponse> {
     const messageQueue: (ChatResponse | Error)[] = [];
@@ -281,17 +304,23 @@ export class ClaudeCodeProvider extends BaseProvider {
     let buffer = '';
 
     const enqueue = (msg: ChatResponse | Error) => {
-      if (!(msg instanceof Error) || !isDone) {
-        messageQueue.push(msg);
-        if (resolveWait) {
-          resolveWait();
-          resolveWait = null;
-        }
+      // Allow all messages except errors after stream completion
+      const isStreamCompleted = isDone;
+      if (msg instanceof Error && isStreamCompleted) return;
+
+      messageQueue.push(msg);
+      if (resolveWait) {
+        resolveWait();
+        resolveWait = null;
       }
     };
 
+    // Context shared across message handlers to prevent text duplication:
+    // When content_block_delta delivers text, assistant messages' text is skipped
+    const streamContext = { hasReceivedTextViaDelta: false };
+
     // Setup stdout handler
-    process.stdout?.on('data', (data: Buffer) => {
+    child.stdout?.on('data', (data: Buffer) => {
       hasReceivedData = true;
       buffer += data.toString();
       const lines = buffer.split('\n');
@@ -299,22 +328,22 @@ export class ClaudeCodeProvider extends BaseProvider {
 
       for (const line of lines) {
         if (line.trim()) {
-          this.parseMessageLine(line, enqueue);
+          this.parseMessageLine(line, enqueue, streamContext);
         }
       }
     });
 
     // Process remaining buffer content when stdout ends
-    process.stdout?.on('end', () => {
+    child.stdout?.on('end', () => {
       if (buffer.trim()) {
         this.logDebug(`Processing remaining buffer on stdout end: ${buffer.substring(0, 100)}`);
-        this.parseMessageLine(buffer, enqueue);
+        this.parseMessageLine(buffer, enqueue, streamContext);
         buffer = '';
       }
     });
 
     // Setup stderr handler
-    process.stderr?.on('data', (data: Buffer) => {
+    child.stderr?.on('data', (data: Buffer) => {
       const stderr = data.toString();
       if (stderr.trim()) {
         this.log(`Stderr: ${stderr.substring(0, MAX_LOG_LENGTH)}`);
@@ -325,14 +354,17 @@ export class ClaudeCodeProvider extends BaseProvider {
     });
 
     // Setup close handler
-    process.on('close', (code: number | null) => {
+    child.on('close', (code: number | null) => {
       // Check if this session was cancelled - don't send empty done: true
       const isCancelled = this.cancelledSessions.has(sessionId);
 
-      if (!hasReceivedData && code !== 0) {
-        if (!isCancelled) {
-          enqueue(new Error(`Claude CLI failed (exit code: ${code})`));
-        }
+      if (code !== 0 && !isCancelled) {
+        const exitError = new Error(
+          hasReceivedData
+            ? `Claude CLI exited with code ${code} (output may be truncated)`
+            : `Claude CLI failed (exit code: ${code})`
+        );
+        enqueue(exitError);
       }
 
       isDone = true;
@@ -346,7 +378,7 @@ export class ClaudeCodeProvider extends BaseProvider {
     });
 
     // Setup error handler
-    process.on('error', (err: Error) => {
+    child.on('error', (err: Error) => {
       enqueue(new Error(`Claude CLI process error: ${err.message}`));
       isDone = true;
       enqueue({ done: true });
@@ -355,8 +387,8 @@ export class ClaudeCodeProvider extends BaseProvider {
     // Setup timeout
     const timeoutId = setTimeout(() => {
       this.log(`Timeout: ${sessionId}`);
-      if (!process.killed) {
-        process.kill('SIGTERM');
+      if (!child.killed) {
+        child.kill('SIGTERM');
       }
     }, this.requestTimeout);
 
@@ -368,8 +400,8 @@ export class ClaudeCodeProvider extends BaseProvider {
       while (!isDone || messageQueue.length > 0) {
         // Check timeout periodically
         if (yieldedCount % 10 === 0 && Date.now() - startTime > this.requestTimeout) {
-          if (!process.killed) {
-            process.kill('SIGKILL');
+          if (!child.killed) {
+            child.kill('SIGKILL');
           }
           throw new Error(`Request timeout after ${this.requestTimeout}ms`);
         }
@@ -392,7 +424,7 @@ export class ClaudeCodeProvider extends BaseProvider {
       clearTimeout(timeoutId);
     }
 
-    this.log(`Complete: ${yieldedCount} messages, PID=${process.pid}`);
+    this.log(`Complete: ${yieldedCount} messages, PID=${child.pid}`);
   }
 
   /** Get or create clean environment (cached) */
@@ -417,27 +449,28 @@ export class ClaudeCodeProvider extends BaseProvider {
   /** Parse JSON message line from Claude CLI */
   private parseMessageLine(
     line: string,
-    enqueue: (msg: ChatResponse | Error) => void
+    enqueue: (msg: ChatResponse | Error) => void,
+    context: { hasReceivedTextViaDelta: boolean }
   ): void {
     try {
-      const message = JSON.parse(line);
+      const message = JSON.parse(line) as CliMessage;
 
       switch (message.type) {
         case 'assistant':
-          this.handleAssistantMessage(message, enqueue);
+          this.handleAssistantMessage(message, enqueue, context);
           break;
         case 'stream_event':
-          this.handleStreamEvent(message, enqueue);
+          this.handleStreamEvent(message, enqueue, context);
           break;
         case 'result':
           this.handleResultMessage(message, enqueue);
           break;
         case 'error':
-          enqueue(new Error(message.error || message.message || 'Unknown error from Claude CLI'));
+          enqueue(new Error(message.error || JSON.stringify(message) || 'Unknown error from Claude CLI'));
           break;
         default:
           if (message.is_error) {
-            enqueue(new Error(message.error || message.message || 'Unknown error from Claude CLI'));
+            enqueue(new Error(message.error || JSON.stringify(message) || 'Unknown error from Claude CLI'));
           }
       }
     } catch {
@@ -447,15 +480,18 @@ export class ClaudeCodeProvider extends BaseProvider {
 
   /** Handle assistant message type */
   private handleAssistantMessage(
-    message: any,
-    enqueue: (msg: ChatResponse | Error) => void
+    message: CliMessage,
+    enqueue: (msg: ChatResponse | Error) => void,
+    context: { hasReceivedTextViaDelta: boolean }
   ): void {
     if (!message.message?.content) return;
 
-    for (const item of message.message.content) {
+    for (const item of message.message.content as CliContentItem[]) {
       switch (item.type) {
         case 'text':
-          if (item.text) {
+          // Skip if text was already delivered via content_block_delta events
+          // (prevents duplication: delta sends incremental text, assistant sends full snapshot)
+          if (item.text && !context.hasReceivedTextViaDelta) {
             enqueue({ content: item.text, done: false });
           }
           break;
@@ -485,8 +521,9 @@ export class ClaudeCodeProvider extends BaseProvider {
 
   /** Handle stream event type */
   private handleStreamEvent(
-    message: any,
-    enqueue: (msg: ChatResponse | Error) => void
+    message: CliMessage,
+    enqueue: (msg: ChatResponse | Error) => void,
+    context: { hasReceivedTextViaDelta: boolean }
   ): void {
     const eventType = message.event?.type;
 
@@ -496,39 +533,46 @@ export class ClaudeCodeProvider extends BaseProvider {
         thinking: { type: 'thinking', content: 'Connected to Claude...' },
       });
     } else if (eventType === 'content_block_start') {
-      enqueue({
-        done: false,
-        thinking: { type: 'thinking', content: 'Thinking...' },
-      });
+      const contentBlock = message.event?.content_block;
+      if (contentBlock?.type === 'thinking') {
+        enqueue({
+          done: false,
+          thinking: { type: 'thinking', content: 'Thinking...' },
+        });
+      }
+    } else if (eventType === 'content_block_delta') {
+      const delta = message.event?.delta;
+      if (delta?.type === 'text_delta' && delta.text) {
+        context.hasReceivedTextViaDelta = true;
+        enqueue({ content: delta.text, done: false });
+      }
     } else if (eventType === 'message_delta' && message.event?.usage) {
-      enqueue({
-        done: false,
-        usage: {
-          promptTokens: message.event.usage.input_tokens || 0,
-          completionTokens: message.event.usage.output_tokens || 0,
-          totalTokens: (message.event.usage.input_tokens || 0) +
-                       (message.event.usage.output_tokens || 0),
-        },
-      });
+      enqueue(this.buildUsage(message.event.usage));
     }
   }
 
   /** Handle result message type */
   private handleResultMessage(
-    message: any,
+    message: CliMessage,
     enqueue: (msg: ChatResponse | Error) => void
   ): void {
     if (message.usage) {
-      enqueue({
-        done: false,
-        usage: {
-          promptTokens: message.usage.input_tokens || 0,
-          completionTokens: message.usage.output_tokens || 0,
-          totalTokens: (message.usage.input_tokens || 0) +
-                       (message.usage.output_tokens || 0),
-        },
-      });
+      enqueue(this.buildUsage(message.usage));
     }
+  }
+
+  /** Build token usage from CLI message usage fields */
+  private buildUsage(usage: { input_tokens?: number; output_tokens?: number }): ChatResponse {
+    const promptTokens = usage.input_tokens || 0;
+    const completionTokens = usage.output_tokens || 0;
+    return {
+      done: false,
+      usage: {
+        promptTokens,
+        completionTokens,
+        totalTokens: promptTokens + completionTokens,
+      },
+    };
   }
 
   /** Format tool input for display */
@@ -564,9 +608,9 @@ export class ClaudeCodeProvider extends BaseProvider {
       return `📁 ${path}`;
     }
 
-    const keys = Object.keys(obj).slice(0, 2);
-    return keys.length > 2
-      ? `{${keys.join(', ')}, ...}`
+    const keys = Object.keys(obj);
+    return keys.length > 3
+      ? `{${keys.slice(0, 3).join(', ')}, ...}`
       : JSON.stringify(obj).slice(0, 80);
   }
 

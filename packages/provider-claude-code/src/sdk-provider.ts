@@ -56,6 +56,9 @@ export class AgentSDKProvider extends BaseProvider {
   /** Active Query objects for graceful cancellation */
   private readonly activeQueries = new Map<string, Awaited<ReturnType<typeof query>>>();
 
+  /** Track sessions that have been cancelled */
+  private readonly cancelledSessions = new Set<string>();
+
   /** Cleanup interval timer */
   private cleanupTimer?: NodeJS.Timeout;
 
@@ -195,6 +198,11 @@ export class AgentSDKProvider extends BaseProvider {
       options.tools = this.tools;
     }
 
+    // Forward system prompt
+    if (request.systemPrompt) {
+      options.systemPrompt = request.systemPrompt;
+    }
+
     // Create abort controller for cancellation
     const abortController = new AbortController();
     this.activeControllers.set(buuoSessionId, abortController);
@@ -202,6 +210,7 @@ export class AgentSDKProvider extends BaseProvider {
 
     // Build prompt
     let prompt = userMessage.content || '';
+    this.log(`User message: ${prompt.substring(0, 200)}${prompt.length > 200 ? '...' : ''}`);
 
     // Process image attachments
     const attachments = (userMessage.metadata?.attachments as Array<{
@@ -226,30 +235,53 @@ export class AgentSDKProvider extends BaseProvider {
       // Store Query object for graceful cancellation
       this.activeQueries.set(buuoSessionId, queryGenerator as any);
 
+      // Setup timeout
+      const timeoutId = setTimeout(() => {
+        this.log(`Timeout: ${buuoSessionId}`);
+        abortController.abort();
+      }, this.requestTimeout);
+
       // Stream responses
-      for await (const message of queryGenerator) {
-        const response = this.convertSDKMessageToChatResponse(message);
+      let messageCount = 0;
+      try {
+        for await (const message of queryGenerator) {
+          messageCount++;
+          const response = this.convertSDKMessageToChatResponse(message);
 
-        if (response) {
-          yield response;
+          if (response) {
+            yield response;
 
-          // Save session ID from first message
-          if (isFirstMessage && message.session_id) {
-            this.sessionMappings.set(buuoSessionId, message.session_id);
-            this.sessionExpiry.set(buuoSessionId, Date.now() + SESSION_TTL);
-            this.log(`Session created: ${buuoSessionId} -> ${message.session_id}`);
-          }
+            // Save session ID from first message
+            if (isFirstMessage && message.session_id) {
+              this.sessionMappings.set(buuoSessionId, message.session_id);
+              this.sessionExpiry.set(buuoSessionId, Date.now() + SESSION_TTL);
+              this.log(`Session created: ${buuoSessionId} -> ${message.session_id}`);
+            }
 
-          // Check if done
-          if (response.done) {
-            break;
+            // Check if done
+            if (response.done) {
+              break;
+            }
           }
         }
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (abortController.signal.aborted) {
+          // Cancelled by user or timeout — end stream gracefully
+          this.log(`Stream aborted: ${errMsg.substring(0, 100)}`);
+        } else {
+          throw err;
+        }
+      } finally {
+        clearTimeout(timeoutId);
       }
+
+      this.log(`Complete: ${messageCount} messages`);
     } finally {
       // Always remove from active controllers and queries
       this.activeControllers.delete(buuoSessionId);
       this.activeQueries.delete(buuoSessionId);
+      this.cancelledSessions.delete(buuoSessionId);
     }
   }
 
@@ -439,25 +471,39 @@ export class AgentSDKProvider extends BaseProvider {
   }
 
   /**
-   * Cancel an active request for a session
-   * @returns true if request was found and cancelled
+   * Cancel an active request for a session (synchronous)
+   * Returns boolean directly so callers can branch on the result.
+   * Uses AbortController for immediate cancellation; interrupt is fire-and-forget.
+   * @returns true if request was found and cancellation attempted
    */
-  async cancelRequest(buuoSessionId: string): Promise<boolean> {
+  cancelRequest(buuoSessionId: string): boolean {
+    const controller = this.activeControllers.get(buuoSessionId);
     const queryObj = this.activeQueries.get(buuoSessionId);
-    if (!queryObj) {
+
+    if (!controller && !queryObj) {
       return false;
     }
 
-    this.log(`Interrupting query for session: ${buuoSessionId}`);
-    try {
-      await queryObj.interrupt();
-      this.activeQueries.delete(buuoSessionId);
-      this.activeControllers.delete(buuoSessionId);
-      return true;
-    } catch (error) {
-      this.log(`Error interrupting query: ${error}`);
-      return false;
+    this.log(`Cancelling request for session: ${buuoSessionId}`);
+
+    // Mark as cancelled so doChatStream knows to suppress errors
+    this.cancelledSessions.add(buuoSessionId);
+
+    // Abort immediately (synchronous)
+    if (controller) {
+      controller.abort();
     }
+
+    // Fire-and-forget graceful interrupt
+    if (queryObj) {
+      queryObj.interrupt().catch((err: unknown) => {
+        this.log(`Error interrupting query: ${err}`);
+      });
+    }
+
+    this.activeControllers.delete(buuoSessionId);
+    this.activeQueries.delete(buuoSessionId);
+    return true;
   }
 
   /** Check if a session has an active request */
@@ -486,6 +532,7 @@ export class AgentSDKProvider extends BaseProvider {
     // Clear all caches
     this.sessionMappings.clear();
     this.sessionExpiry.clear();
+    this.cancelledSessions.clear();
     this.log('Cleanup complete');
   }
 }

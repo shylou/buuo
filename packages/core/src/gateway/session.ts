@@ -70,6 +70,10 @@ export class SessionManager {
       const session = this.sessions.get(sessionId);
       if (session && session.active) {
         session.lastActivity = new Date();
+        this.logger?.debug('Session reused', {
+          sessionId,
+          conversationId: message.conversationId
+        });
         return session;
       }
     }
@@ -105,7 +109,14 @@ export class SessionManager {
     }
     this.userSessions.get(message.userId)!.add(sessionId);
 
-    this.logger?.debug(`Session created: ${sessionId}`);
+    this.logger?.debug('Session created', {
+      sessionId,
+      conversationId: message.conversationId,
+      userId: message.userId,
+      channelId: session.channelId,
+      totalSessions: this.sessions.size,
+      activeSessions: this.activeSessionIds.size
+    });
     return session;
   }
 
@@ -141,7 +152,10 @@ export class SessionManager {
    */
   addMessage(sessionId: string, message: ChatMessage): void {
     const session = this.sessions.get(sessionId);
-    if (!session) return;
+    if (!session) {
+      this.logger?.warn('Cannot add message: session not found', { sessionId });
+      return;
+    }
 
     session.messages.push(message);
     session.lastActivity = new Date();
@@ -149,7 +163,14 @@ export class SessionManager {
     // Trim history if needed
     const maxHistory = this.options.maxHistory ?? SESSION_CONSTANTS.DEFAULT_MAX_HISTORY;
     if (session.messages.length > maxHistory) {
+      const removedCount = session.messages.length - maxHistory;
       session.messages = session.messages.slice(-maxHistory);
+      this.logger?.debug('Session history trimmed', {
+        sessionId,
+        removedCount,
+        remainingCount: session.messages.length,
+        maxHistory
+      });
     }
   }
 
@@ -158,10 +179,18 @@ export class SessionManager {
    */
   updateData(sessionId: string, data: Record<string, unknown>): void {
     const session = this.sessions.get(sessionId);
-    if (!session) return;
+    if (!session) {
+      this.logger?.warn('Cannot update data: session not found', { sessionId });
+      return;
+    }
 
     session.data = { ...session.data, ...data };
     session.lastActivity = new Date();
+
+    this.logger?.debug('Session data updated', {
+      sessionId,
+      keysCount: Object.keys(data).length
+    });
   }
 
   /**
@@ -169,10 +198,19 @@ export class SessionManager {
    */
   clearHistory(sessionId: string): void {
     const session = this.sessions.get(sessionId);
-    if (!session) return;
+    if (!session) {
+      this.logger?.warn('Cannot clear history: session not found', { sessionId });
+      return;
+    }
 
+    const previousLength = session.messages.length;
     session.messages = [];
     session.lastActivity = new Date();
+
+    this.logger?.debug('Session history cleared', {
+      sessionId,
+      previousLength
+    });
   }
 
   /**
@@ -180,7 +218,10 @@ export class SessionManager {
    */
   deactivate(sessionId: string): void {
     const session = this.sessions.get(sessionId);
-    if (!session) return;
+    if (!session) {
+      this.logger?.warn('Cannot deactivate: session not found', { sessionId });
+      return;
+    }
 
     session.active = false;
     this.activeSessionIds.delete(sessionId);
@@ -194,7 +235,11 @@ export class SessionManager {
       }
     }
 
-    this.logger?.debug(`Session deactivated: ${sessionId}`);
+    this.logger?.debug('Session deactivated', {
+      sessionId,
+      conversationId: session.conversationId,
+      remainingActiveSessions: this.activeSessionIds.size
+    });
   }
 
   /**
@@ -202,7 +247,10 @@ export class SessionManager {
    */
   delete(sessionId: string): void {
     const session = this.sessions.get(sessionId);
-    if (!session) return;
+    if (!session) {
+      this.logger?.warn('Cannot delete: session not found', { sessionId });
+      return;
+    }
 
     this.sessions.delete(sessionId);
     this.activeSessionIds.delete(sessionId);
@@ -216,7 +264,11 @@ export class SessionManager {
       }
     }
 
-    this.logger?.debug(`Session deleted: ${sessionId}`);
+    this.logger?.debug('Session deleted', {
+      sessionId,
+      conversationId: session.conversationId,
+      remainingSessions: this.sessions.size
+    });
   }
 
   /**
@@ -229,7 +281,7 @@ export class SessionManager {
   }
 
   /**
-   * Get session statistics
+   * Get session statistics (optimized to avoid creating intermediate arrays)
    */
   getStats(): {
     total: number;
@@ -238,7 +290,7 @@ export class SessionManager {
   } {
     return {
       total: this.sessions.size,
-      active: this.listActive().length,
+      active: this.activeSessionIds.size,
       byUser: this.userSessions.size
     };
   }

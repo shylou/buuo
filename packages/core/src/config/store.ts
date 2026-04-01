@@ -56,6 +56,19 @@ export class ConfigStore {
   private _data: ConfigObject = Object.create(null);
   private _watchers: Set<(key: string, value: ConfigValue) => void> = new Set();
 
+  /** Supported file extensions */
+  private readonly FILE_EXTENSIONS = {
+    JSON: 'json',
+    YAML: 'yaml',
+    YML: 'yml'
+  } as const;
+
+  /** Error message templates */
+  private readonly ERRORS = {
+    NO_PATH: 'No config file path specified',
+    UNSUPPORTED_TYPE: (ext: string) => `Unsupported config file type: ${ext}`
+  } as const;
+
   constructor(
     private readonly options: ConfigOptions = {},
     private readonly logger?: Logger
@@ -72,13 +85,16 @@ export class ConfigStore {
     const path = filePath ?? this.options.path;
 
     if (!path) {
-      throw new Error('No config file path specified');
+      throw new Error(this.ERRORS.NO_PATH);
     }
 
     const resolvedPath = resolve(path);
 
     if (!existsSync(resolvedPath)) {
-      this.logger?.warn(`Config file not found: ${resolvedPath}`);
+      this.logger?.warn('Config file not found, using defaults', {
+        path: resolvedPath,
+        hasDefaults: !!this.options.defaults
+      });
       this._data = (this.options.defaults ? { ...this.options.defaults } : {}) as ConfigObject;
       return;
     }
@@ -90,7 +106,10 @@ export class ConfigStore {
     const expandedData = expandEnvVars(data) as ConfigObject;
 
     this._data = this.mergeDefaults(expandedData);
-    this.logger?.info(`Config loaded from: ${resolvedPath}`);
+    this.logger?.info('Config loaded successfully', {
+      path: resolvedPath,
+      keysCount: Object.keys(this._data).length
+    });
   }
 
   /**
@@ -100,7 +119,7 @@ export class ConfigStore {
     const path = filePath ?? this.options.path;
 
     if (!path) {
-      throw new Error('No config file path specified');
+      throw new Error(this.ERRORS.NO_PATH);
     }
 
     const resolvedPath = resolve(path);
@@ -111,7 +130,10 @@ export class ConfigStore {
     await fs.mkdir(dirname(resolvedPath), { recursive: true });
 
     await writeFile(resolvedPath, content, 'utf-8');
-    this.logger?.info(`Config saved to: ${resolvedPath}`);
+    this.logger?.info('Config saved successfully', {
+      path: resolvedPath,
+      size: content.length
+    });
   }
 
   /**
@@ -150,6 +172,11 @@ export class ConfigStore {
     const lastKey = keys[keys.length - 1];
     current[lastKey] = value;
 
+    this.logger?.debug('Config value set', {
+      key,
+      valueType: typeof value
+    });
+
     // Notify watchers
     for (const watcher of this._watchers) {
       watcher(key, value);
@@ -158,7 +185,9 @@ export class ConfigStore {
     // Auto-save if enabled
     if (this.options.autoSave) {
       this.save().catch(err => {
-        this.logger?.error(`Failed to auto-save config: ${err}`);
+        this.logger?.error('Failed to auto-save config', {
+          error: err instanceof Error ? err.message : String(err)
+        });
       });
     }
   }
@@ -239,14 +268,14 @@ export class ConfigStore {
     const ext = path.split('.').pop()?.toLowerCase();
 
     switch (ext) {
-      case 'json':
+      case this.FILE_EXTENSIONS.JSON:
         return JSON.parse(content);
-      case 'yaml':
-      case 'yml':
-        // Dynamic import for YAML
+      case this.FILE_EXTENSIONS.YAML:
+      case this.FILE_EXTENSIONS.YML:
         return this.parseYAML(content);
       default:
-        throw new Error(`Unsupported config file type: ${ext}`);
+        this.logger?.error('Unsupported config file type', { ext, path });
+        throw new Error(this.ERRORS.UNSUPPORTED_TYPE(ext || 'unknown'));
     }
   }
 
@@ -257,12 +286,13 @@ export class ConfigStore {
     const ext = path.split('.').pop()?.toLowerCase();
 
     switch (ext) {
-      case 'json':
+      case this.FILE_EXTENSIONS.JSON:
         return JSON.stringify(data, null, 2);
-      case 'yaml':
-      case 'yml':
+      case this.FILE_EXTENSIONS.YAML:
+      case this.FILE_EXTENSIONS.YML:
         return this.stringifyYAML(data);
       default:
+        this.logger?.warn('Unknown file extension, defaulting to JSON', { ext });
         return JSON.stringify(data, null, 2);
     }
   }

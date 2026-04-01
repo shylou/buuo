@@ -85,7 +85,22 @@ export interface AuthResult {
 export class AuthManager {
   private readonly users = new Map<string, User>();
   private readonly pairingCodes = new Map<string, PairingCode>();
+  private readonly userSessions = new Map<string, Set<string>>(); // userId -> Set of tokens
   private readonly sessions = new Map<string, { userId: string; expiresAt: Date }>();
+
+  /** Default TTL constants */
+  private readonly DEFAULTS = {
+    PAIRING_TTL: 300000, // 5 minutes
+    SESSION_TTL: 86400000 // 24 hours
+  } as const;
+
+  /** Error message templates */
+  private readonly ERRORS = {
+    INVALID_PAIRING_CODE: 'Invalid pairing code',
+    PAIRING_CODE_USED: 'Pairing code already used',
+    PAIRING_CODE_EXPIRED: 'Pairing code expired',
+    PAIRING_CODE_MISMATCH: 'Pairing code not for this user'
+  } as const;
 
   constructor(
     private readonly options: AuthOptions = {},
@@ -97,7 +112,7 @@ export class AuthManager {
    */
   async generatePairingCode(userId?: string): Promise<PairingCode> {
     const code = this.generateCode();
-    const ttl = this.options.pairingTTL ?? 300000; // 5 minutes default
+    const ttl = this.options.pairingTTL ?? this.DEFAULTS.PAIRING_TTL;
 
     const pairingCode: PairingCode = {
       code,
@@ -108,11 +123,17 @@ export class AuthManager {
     };
 
     this.pairingCodes.set(code, pairingCode);
-    this.logger?.info(`Pairing code generated: ${code}`);
+    this.logger?.info('Pairing code generated', {
+      code,
+      userId,
+      expiresAt: pairingCode.expiresAt,
+      ttl
+    });
 
     // Schedule cleanup
     setTimeout(() => {
       this.pairingCodes.delete(code);
+      this.logger?.debug('Pairing code expired and cleaned up', { code });
     }, ttl);
 
     return pairingCode;
@@ -125,26 +146,54 @@ export class AuthManager {
     const pairingCode = this.pairingCodes.get(code);
 
     if (!pairingCode) {
-      return { success: false, error: 'Invalid pairing code' };
+      this.logger?.warn('Pairing code validation failed', {
+        code,
+        userId,
+        reason: 'not_found'
+      });
+      return { success: false, error: this.ERRORS.INVALID_PAIRING_CODE };
     }
 
     if (pairingCode.used) {
-      return { success: false, error: 'Pairing code already used' };
+      this.logger?.warn('Pairing code validation failed', {
+        code,
+        userId,
+        reason: 'already_used'
+      });
+      return { success: false, error: this.ERRORS.PAIRING_CODE_USED };
     }
 
     if (pairingCode.expiresAt < new Date()) {
       this.pairingCodes.delete(code);
-      return { success: false, error: 'Pairing code expired' };
+      this.logger?.warn('Pairing code validation failed', {
+        code,
+        userId,
+        reason: 'expired',
+        expiredAt: pairingCode.expiresAt
+      });
+      return { success: false, error: this.ERRORS.PAIRING_CODE_EXPIRED };
     }
 
     // Check if code is for specific user
     if (pairingCode.userId && pairingCode.userId !== userId) {
-      return { success: false, error: 'Pairing code not for this user' };
+      this.logger?.warn('Pairing code validation failed', {
+        code,
+        userId,
+        expectedUserId: pairingCode.userId,
+        reason: 'user_mismatch'
+      });
+      return { success: false, error: this.ERRORS.PAIRING_CODE_MISMATCH };
     }
 
     // Pair the user
     pairingCode.used = true;
     const user = await this.pairUser(userId);
+
+    this.logger?.info('User paired successfully', {
+      userId,
+      code,
+      isAdmin: user.admin
+    });
 
     return {
       success: true,
@@ -182,10 +231,15 @@ export class AuthManager {
       };
 
       this.users.set(userId, user);
-      this.logger?.info(`User paired: ${userId}`);
+      this.logger?.info('New user created and paired', {
+        userId,
+        isAdmin,
+        roles: user.roles
+      });
     } else {
       user.paired = true;
       user.lastSeen = new Date();
+      this.logger?.debug('Existing user paired', { userId });
     }
 
     return user;
@@ -198,14 +252,23 @@ export class AuthManager {
     const user = this.users.get(userId);
     if (user) {
       user.paired = false;
-      this.logger?.info(`User unpaired: ${userId}`);
+      this.logger?.info('User unpaired', { userId });
     }
 
-    // Invalidate sessions
-    for (const [token, session] of this.sessions) {
-      if (session.userId === userId) {
-        this.sessions.delete(token);
+    // Invalidate sessions using userSessions index (O(1) lookup)
+    const userTokens = this.userSessions.get(userId);
+    if (userTokens) {
+      let invalidatedCount = 0;
+      for (const token of userTokens) {
+        if (this.sessions.delete(token)) {
+          invalidatedCount++;
+        }
       }
+      this.userSessions.delete(userId);
+      this.logger?.debug('User sessions invalidated', {
+        userId,
+        count: invalidatedCount
+      });
     }
   }
 
@@ -221,10 +284,18 @@ export class AuthManager {
    */
   updateUser(userId: string, updates: Partial<User>): User | undefined {
     const user = this.users.get(userId);
-    if (!user) return undefined;
+    if (!user) {
+      this.logger?.warn('Cannot update user: not found', { userId });
+      return undefined;
+    }
 
     Object.assign(user, updates);
     user.lastSeen = new Date();
+
+    this.logger?.debug('User updated', {
+      userId,
+      updateKeys: Object.keys(updates)
+    });
 
     return user;
   }
@@ -257,11 +328,18 @@ export class AuthManager {
    */
   grantPermission(userId: string, permission: string): void {
     const user = this.users.get(userId);
-    if (!user) return;
+    if (!user) {
+      this.logger?.warn('Cannot grant permission: user not found', { userId });
+      return;
+    }
 
     if (!user.permissions.includes(permission)) {
       user.permissions.push(permission);
-      this.logger?.debug(`Permission granted: ${userId} -> ${permission}`);
+      this.logger?.info('Permission granted', {
+        userId,
+        permission,
+        totalPermissions: user.permissions.length
+      });
     }
   }
 
@@ -270,12 +348,19 @@ export class AuthManager {
    */
   revokePermission(userId: string, permission: string): void {
     const user = this.users.get(userId);
-    if (!user) return;
+    if (!user) {
+      this.logger?.warn('Cannot revoke permission: user not found', { userId });
+      return;
+    }
 
     const index = user.permissions.indexOf(permission);
     if (index > -1) {
       user.permissions.splice(index, 1);
-      this.logger?.debug(`Permission revoked: ${userId} -> ${permission}`);
+      this.logger?.info('Permission revoked', {
+        userId,
+        permission,
+        remainingPermissions: user.permissions.length
+      });
     }
   }
 
@@ -291,6 +376,14 @@ export class AuthManager {
 
     if (session.expiresAt < new Date()) {
       this.sessions.delete(token);
+      // Clean up userSessions index
+      const userTokens = this.userSessions.get(session.userId);
+      if (userTokens) {
+        userTokens.delete(token);
+        if (userTokens.size === 0) {
+          this.userSessions.delete(session.userId);
+        }
+      }
       return { valid: false };
     }
 
@@ -305,7 +398,7 @@ export class AuthManager {
   }
 
   /**
-   * Get statistics
+   * Get statistics (optimized to avoid creating temporary arrays)
    */
   getStats(): {
     totalUsers: number;
@@ -313,11 +406,24 @@ export class AuthManager {
     activeSessions: number;
     activePairingCodes: number;
   } {
+    // Count paired users without creating array
+    let pairedUsers = 0;
+    const now = new Date();
+    let activePairingCodes = 0;
+
+    for (const user of this.users.values()) {
+      if (user.paired) pairedUsers++;
+    }
+
+    for (const code of this.pairingCodes.values()) {
+      if (!code.used && code.expiresAt > now) activePairingCodes++;
+    }
+
     return {
       totalUsers: this.users.size,
-      pairedUsers: Array.from(this.users.values()).filter(u => u.paired).length,
+      pairedUsers,
       activeSessions: this.sessions.size,
-      activePairingCodes: Array.from(this.pairingCodes.values()).filter(c => !c.used && c.expiresAt > new Date()).length
+      activePairingCodes
     };
   }
 
@@ -326,10 +432,22 @@ export class AuthManager {
    */
   private createSession(userId: string): string {
     const token = this.generateToken();
-    const ttl = this.options.sessionTTL ?? 86400000; // 24 hours default
+    const ttl = this.options.sessionTTL ?? this.DEFAULTS.SESSION_TTL;
 
     this.sessions.set(token, {
       userId,
+      expiresAt: new Date(Date.now() + ttl)
+    });
+
+    // Update userSessions index
+    if (!this.userSessions.has(userId)) {
+      this.userSessions.set(userId, new Set());
+    }
+    this.userSessions.get(userId)!.add(token);
+
+    this.logger?.debug('Session created', {
+      userId,
+      ttl,
       expiresAt: new Date(Date.now() + ttl)
     });
 

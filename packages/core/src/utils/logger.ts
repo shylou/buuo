@@ -44,31 +44,45 @@ export interface Logger {
   child(bindings: Record<string, unknown>): Logger;
 }
 
+/** Log level hierarchy for filtering */
+const LOG_LEVELS: LogLevel[] = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'];
+
+/** Default log level */
+const DEFAULT_LOG_LEVEL: LogLevel = 'info';
+
 export class PinoLoggerAdapter implements Logger {
   constructor(private readonly pino: PinoLogger) {}
 
+  private normalizeArgs(args: unknown[]): Record<string, unknown> {
+    if (args.length === 0) return {};
+    if (args.length === 1 && typeof args[0] === 'object' && args[0] !== null) {
+      return args[0] as Record<string, unknown>;
+    }
+    return { args };
+  }
+
   trace(msg: string, ...args: unknown[]): void {
-    this.pino.trace({ args }, msg);
+    this.pino.trace(this.normalizeArgs(args), msg);
   }
 
   debug(msg: string, ...args: unknown[]): void {
-    this.pino.debug({ args }, msg);
+    this.pino.debug(this.normalizeArgs(args), msg);
   }
 
   info(msg: string, ...args: unknown[]): void {
-    this.pino.info({ args }, msg);
+    this.pino.info(this.normalizeArgs(args), msg);
   }
 
   warn(msg: string, ...args: unknown[]): void {
-    this.pino.warn({ args }, msg);
+    this.pino.warn(this.normalizeArgs(args), msg);
   }
 
   error(msg: string, ...args: unknown[]): void {
-    this.pino.error({ args }, msg);
+    this.pino.error(this.normalizeArgs(args), msg);
   }
 
   fatal(msg: string, ...args: unknown[]): void {
-    this.pino.fatal({ args }, msg);
+    this.pino.fatal(this.normalizeArgs(args), msg);
   }
 
   child(bindings: Record<string, unknown>): Logger {
@@ -78,7 +92,7 @@ export class PinoLoggerAdapter implements Logger {
 
 export class ConsoleLogger implements Logger {
   constructor(
-    private readonly level: LogLevel = 'info',
+    private readonly level: LogLevel = DEFAULT_LOG_LEVEL,
     private readonly context: Record<string, unknown> = {}
   ) {}
 
@@ -87,45 +101,70 @@ export class ConsoleLogger implements Logger {
     return new Date().toISOString().replace('T', ' ').slice(0, 23);
   }
 
+  // Format context object into string
+  private formatContext(ctx: Record<string, unknown>): string {
+    const entries = Object.entries(ctx)
+      .map(([k, v]) => {
+        if (typeof v === 'object' && v !== null) {
+          return `${k}=${JSON.stringify(v)}`;
+        }
+        return `${k}=${v}`;
+      })
+      .join(' ');
+    return entries;
+  }
+
   trace(msg: string, ...args: unknown[]): void {
     if (this.shouldLog('trace')) {
       const ts = this.getTimestamp();
-      console.trace(`[${ts}]`, '[TRACE]', this.format(msg), ...args);
+      const baseCtx = this.formatContext(this.context);
+      const ctxStr = baseCtx ? ` [${baseCtx}]` : '';
+      console.trace(`[${ts}]`, '[TRACE]', msg + ctxStr, ...args);
     }
   }
 
   debug(msg: string, ...args: unknown[]): void {
     if (this.shouldLog('debug')) {
       const ts = this.getTimestamp();
-      console.debug(`[${ts}]`, '[DEBUG]', this.format(msg), ...args);
+      const baseCtx = this.formatContext(this.context);
+      const ctxStr = baseCtx ? ` [${baseCtx}]` : '';
+      console.debug(`[${ts}]`, '[DEBUG]', msg + ctxStr, ...args);
     }
   }
 
   info(msg: string, ...args: unknown[]): void {
     if (this.shouldLog('info')) {
       const ts = this.getTimestamp();
-      console.info(`[${ts}]`, '[INFO]', this.format(msg), ...args);
+      const baseCtx = this.formatContext(this.context);
+      const ctxStr = baseCtx ? ` [${baseCtx}]` : '';
+      console.info(`[${ts}]`, '[INFO]', msg + ctxStr, ...args);
     }
   }
 
   warn(msg: string, ...args: unknown[]): void {
     if (this.shouldLog('warn')) {
       const ts = this.getTimestamp();
-      console.warn(`[${ts}]`, '[WARN]', this.format(msg), ...args);
+      const baseCtx = this.formatContext(this.context);
+      const ctxStr = baseCtx ? ` [${baseCtx}]` : '';
+      console.warn(`[${ts}]`, '[WARN]', msg + ctxStr, ...args);
     }
   }
 
   error(msg: string, ...args: unknown[]): void {
     if (this.shouldLog('error')) {
       const ts = this.getTimestamp();
-      console.error(`[${ts}]`, '[ERROR]', this.format(msg), ...args);
+      const baseCtx = this.formatContext(this.context);
+      const ctxStr = baseCtx ? ` [${baseCtx}]` : '';
+      console.error(`[${ts}]`, '[ERROR]', msg + ctxStr, ...args);
     }
   }
 
   fatal(msg: string, ...args: unknown[]): void {
     if (this.shouldLog('fatal')) {
       const ts = this.getTimestamp();
-      console.error(`[${ts}]`, '[FATAL]', this.format(msg), ...args);
+      const baseCtx = this.formatContext(this.context);
+      const ctxStr = baseCtx ? ` [${baseCtx}]` : '';
+      console.error(`[${ts}]`, '[FATAL]', msg + ctxStr, ...args);
     }
   }
 
@@ -134,15 +173,7 @@ export class ConsoleLogger implements Logger {
   }
 
   private shouldLog(level: LogLevel): boolean {
-    const levels: LogLevel[] = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'];
-    return levels.indexOf(level) >= levels.indexOf(this.level);
-  }
-
-  private format(msg: string): string {
-    const ctx = Object.entries(this.context)
-      .map(([k, v]) => `${k}=${v}`)
-      .join(' ');
-    return ctx ? `${msg} [${ctx}]` : msg;
+    return LOG_LEVELS.indexOf(level) >= LOG_LEVELS.indexOf(this.level);
   }
 }
 
@@ -163,7 +194,7 @@ export interface LoggerFactoryOptions {
 let defaultLogger: Logger | null = null;
 
 export async function createLogger(options: LoggerFactoryOptions = {}): Promise<Logger> {
-  const { level = 'info', usePino = true, pinoOptions = {}, context = {} } = options;
+  const { level = DEFAULT_LOG_LEVEL, usePino = true, pinoOptions = {}, context = {} } = options;
 
   if (usePino) {
     try {
@@ -171,8 +202,14 @@ export async function createLogger(options: LoggerFactoryOptions = {}): Promise<
       const pinoLogger = pino.default({ level, ...pinoOptions });
       defaultLogger = new PinoLoggerAdapter(pinoLogger);
       return defaultLogger;
-    } catch {
+    } catch (error) {
       // Pino not available, fall back to console
+      const fallbackLogger = new ConsoleLogger(level, context);
+      // Log the fallback using console directly to avoid recursion
+      console.warn('[Logger] Pino not available, using console logger', {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return fallbackLogger;
     }
   }
 

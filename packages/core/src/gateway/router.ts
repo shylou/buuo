@@ -76,6 +76,15 @@ export class MessageRouter {
   private readonly providerMap = new Map<string, AIProvider>();
   private readonly conversationChannel = new LRUCache<string, string>(1000); // LRU cache with max 1000 entries
 
+  /** Default configuration constants */
+  private readonly DEFAULTS = {
+    PROVIDER_ID: 'default',
+    MODEL: 'default',
+    TEMPERATURE: 0.7,
+    MAX_TOKENS: 4096,
+    STREAM: true
+  } as const;
+
   constructor(
     private readonly options: RouterOptions = {},
     private readonly logger?: Logger
@@ -86,7 +95,10 @@ export class MessageRouter {
    */
   registerChannel(channel: Channel): void {
     this.channelMap.set(channel.id, channel);
-    this.logger?.debug(`Channel registered: ${channel.id}`);
+    this.logger?.debug('Channel registered', {
+      channelId: channel.id,
+      totalChannels: this.channelMap.size
+    });
   }
 
   /**
@@ -94,7 +106,10 @@ export class MessageRouter {
    */
   unregisterChannel(channelId: string): void {
     this.channelMap.delete(channelId);
-    this.logger?.debug(`Channel unregistered: ${channelId}`);
+    this.logger?.debug('Channel unregistered', {
+      channelId,
+      remainingChannels: this.channelMap.size
+    });
   }
 
   /**
@@ -102,7 +117,10 @@ export class MessageRouter {
    */
   registerProvider(provider: AIProvider): void {
     this.providerMap.set(provider.id, provider);
-    this.logger?.debug(`Provider registered: ${provider.id}`);
+    this.logger?.debug('Provider registered', {
+      providerId: provider.id,
+      totalProviders: this.providerMap.size
+    });
   }
 
   /**
@@ -110,7 +128,10 @@ export class MessageRouter {
    */
   unregisterProvider(providerId: string): void {
     this.providerMap.delete(providerId);
-    this.logger?.debug(`Provider unregistered: ${providerId}`);
+    this.logger?.debug('Provider unregistered', {
+      providerId,
+      remainingProviders: this.providerMap.size
+    });
   }
 
   /**
@@ -128,26 +149,33 @@ export class MessageRouter {
     // Track conversation -> channel mapping
     this.conversationChannel.set(message.conversationId, message.metadata?.channelId as string);
 
-    // Get provider
-    let providerId = session.data.providerId as string ?? this.options.defaultProvider ?? 'default';
+    // Get provider with fallback logic
+    let providerId = session.data.providerId as string ?? this.options.defaultProvider ?? this.DEFAULTS.PROVIDER_ID;
     let provider = this.providerMap.get(providerId);
 
     // If provider not found, try default provider
-    if (!provider && providerId !== 'default') {
-      providerId = this.options.defaultProvider ?? 'default';
+    if (!provider && providerId !== this.DEFAULTS.PROVIDER_ID) {
+      providerId = this.options.defaultProvider ?? this.DEFAULTS.PROVIDER_ID;
       provider = this.providerMap.get(providerId);
     }
 
+    // Validate provider exists
     if (!provider) {
+      this.logger?.error('Provider not found', {
+        requestedProviderId: providerId,
+        availableProviders: Array.from(this.providerMap.keys())
+      });
       throw new Error(`Provider not found: ${providerId}`);
     }
 
     // Store providerId in session for /cancel command
     session.data.providerId = providerId;
 
-    if (!provider) {
-      throw new Error(`Provider not found: ${providerId}`);
-    }
+    this.logger?.debug('Routing to provider', {
+      sessionId: session.id,
+      providerId,
+      model: session.data.model
+    });
 
     // Build message with only current content (resume mode - Claude Code manages history)
     const messages = [{
@@ -158,19 +186,27 @@ export class MessageRouter {
       }
     }];
 
-    // Build chat request
-    const model = session.data.model as string || 'default';
+    // Build chat request with session and defaults
+    const model = session.data.model as string || this.DEFAULTS.MODEL;
     const request: ChatRequest = {
       sessionId: session.id,
       messages: messages,
       systemPrompt: session.data.systemPrompt as string ?? this.options.systemPrompt,
-      temperature: session.data.temperature as number ?? this.options.temperature ?? 0.7,
-      maxTokens: session.data.maxTokens as number ?? this.options.maxTokens ?? 4096,
+      temperature: session.data.temperature as number ?? this.options.temperature ?? this.DEFAULTS.TEMPERATURE,
+      maxTokens: session.data.maxTokens as number ?? this.options.maxTokens ?? this.DEFAULTS.MAX_TOKENS,
       model: getModelForProvider(model, provider.id)
     };
 
+    this.logger?.debug('Chat request prepared', {
+      sessionId: session.id,
+      model: request.model,
+      temperature: request.temperature,
+      maxTokens: request.maxTokens,
+      stream: this.options.stream ?? this.DEFAULTS.STREAM
+    });
+
     // Route to provider
-    if (this.options.stream ?? true) {
+    if (this.options.stream ?? this.DEFAULTS.STREAM) {
       return provider.chatStream(request);
     } else {
       const response = await provider.chat(request);
@@ -189,19 +225,31 @@ export class MessageRouter {
   ): Promise<void> {
     const channel = this.getChannelForConversation(conversationId);
     if (!channel) {
+      this.logger?.error('No channel found for conversation', {
+        conversationId,
+        cachedConversations: this.conversationChannel.size
+      });
       throw new Error(`No channel found for conversation: ${conversationId}`);
     }
 
     let fullContent = '';
+    let chunkCount = 0;
 
     for await (const response of responses) {
       if (response.content) {
         fullContent += response.content;
+        chunkCount++;
       }
 
       // Note: toolCalls in responses are available but not currently handled
 
       if (response.done) {
+        this.logger?.debug('Sending response to channel', {
+          conversationId,
+          contentLength: fullContent.length,
+          chunkCount
+        });
+
         await channel.sendMessage({
           conversationId,
           content: fullContent
