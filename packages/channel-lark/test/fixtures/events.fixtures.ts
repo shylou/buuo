@@ -1,11 +1,11 @@
 /**
- * 飞书事件测试数据 Fixtures
- * 参考：packages/channel-lark/src/lark.ts 中的事件处理逻辑
+ * Lark event test data fixtures
+ * Reference: packages/channel-lark/src/lark.ts event handling logic
  */
 
 import type { LarkEvent } from '../../src/types.js';
 
-/** 文本消息事件 */
+/** Text message event */
 export const textMessageEvent: LarkEvent = {
   schema: 'im.message.receive_v1',
   header: {
@@ -39,7 +39,7 @@ export const textMessageEvent: LarkEvent = {
   },
 };
 
-/** 图片消息事件 */
+/** Image message event */
 export const imageMessageEvent: LarkEvent = {
   schema: 'im.message.receive_v1',
   header: {
@@ -73,7 +73,7 @@ export const imageMessageEvent: LarkEvent = {
   },
 };
 
-/** 长消息事件（>15000字符，需要分割） */
+/** Long message event (>15000 chars, requires splitting) */
 export const longMessageEvent: LarkEvent = {
   schema: 'im.message.receive_v1',
   header: {
@@ -107,7 +107,7 @@ export const longMessageEvent: LarkEvent = {
   },
 };
 
-/** 表格密集消息（>10个表格，按表格边界分割） */
+/** Table-dense message (>10 tables, split by table boundary) */
 export const tableDenseMessageEvent: LarkEvent = {
   schema: 'im.message.receive_v1',
   header: {
@@ -143,7 +143,7 @@ export const tableDenseMessageEvent: LarkEvent = {
   },
 };
 
-/** 无效 JSON content 的消息（测试降级处理） */
+/** Invalid JSON content message (tests graceful degradation) */
 export const invalidJsonEvent: LarkEvent = {
   schema: 'im.message.receive_v1',
   header: {
@@ -177,7 +177,7 @@ export const invalidJsonEvent: LarkEvent = {
   },
 };
 
-/** 空 message 字段的事件 */
+/** Event with null message field */
 export const emptyMessageEvent: LarkEvent = {
   schema: 'im.message.receive_v1',
   header: {
@@ -201,7 +201,7 @@ export const emptyMessageEvent: LarkEvent = {
   },
 };
 
-/** 用于测试去重的重复 message_id 事件 */
+/** Duplicate message_id event for deduplication testing */
 export const duplicateMessageEvent: LarkEvent = {
   schema: 'im.message.receive_v1',
   header: {
@@ -222,7 +222,7 @@ export const duplicateMessageEvent: LarkEvent = {
       tenant_key: 'test_tenant',
     },
     message: {
-      message_id: 'msg_text_001', // 与 textMessageEvent 相同的 message_id
+      message_id: 'msg_text_001', // Same message_id as textMessageEvent
       root_id: null,
       parent_id: null,
       create_time: '1712000001000',

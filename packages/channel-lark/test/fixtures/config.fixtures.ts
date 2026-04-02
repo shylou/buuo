@@ -1,10 +1,10 @@
 /**
- * ChannelConfig 测试数据 Fixtures
+ * ChannelConfig test data fixtures
  */
 
 import type { ChannelConfig } from '@buuo/core';
 
-/** 有效的 ChannelConfig（包含必需的 appSecret） */
+/** Valid ChannelConfig with required appSecret */
 export const validChannelConfig: ChannelConfig = {
   token: 'cli_test_app_id',
   options: {
@@ -14,13 +14,13 @@ export const validChannelConfig: ChannelConfig = {
   },
 };
 
-/** 缺少 appSecret 的无效配置（应该抛错） */
+/** Invalid config missing appSecret (should throw) */
 export const missingAppSecretConfig: ChannelConfig = {
   token: 'cli_test_app_id',
   options: {},
 };
 
-/** appSecret 为空字符串的无效配置（应该抛错） */
+/** Invalid config with empty appSecret string (should throw) */
 export const emptyAppSecretConfig: ChannelConfig = {
   token: 'cli_test_app_id',
   options: {
@@ -28,7 +28,7 @@ export const emptyAppSecretConfig: ChannelConfig = {
   },
 };
 
-/** 缺少 token/appId 的无效配置（应该抛错） */
+/** Invalid config missing token/appId (should throw) */
 export const missingTokenConfig: ChannelConfig = {
   token: '',
   options: {
@@ -36,7 +36,7 @@ export const missingTokenConfig: ChannelConfig = {
   },
 };
 
-/** 只有必需字段的最小有效配置 */
+/** Minimal valid config with only required fields */
 export const minimalValidConfig: ChannelConfig = {
   token: 'cli_test_app_id',
   options: {

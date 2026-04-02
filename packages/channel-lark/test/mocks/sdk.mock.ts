@@ -37,7 +37,7 @@ export const MockClient = vi.fn().mockImplementation((_config: any) => ({
   }
 }));
 
-// vi.mock 声明（在测试文件顶部）
+// Call in test file top-level scope for vi.mock hoisting
 export function setupSDKMock() {
   vi.mock('@larksuiteoapi/node-sdk', () => ({
     EventDispatcher: MockEventDispatcher,
@@ -47,6 +47,6 @@ export function setupSDKMock() {
   }));
 }
 
-// 注意：不导出预先构造的实例
-// 使用构造函数断言：expect(MockWSClient).toHaveBeenCalledWith(...)
-// 或从 mock.results 获取实际实例：const instance = MockWSClient.mock.results[0]?.value
+// Note: do not export pre-constructed instances
+// Use constructor assertions: expect(MockWSClient).toHaveBeenCalledWith(...)
+// Or get actual instance from mock.results: const instance = MockWSClient.mock.results[0]?.value
