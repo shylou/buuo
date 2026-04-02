@@ -7,8 +7,6 @@ import type {
   ChannelConfig,
   ChannelStatus,
   IncomingMessage,
-  OutgoingMessage,
-  MessageHandler
 } from '@buuo/core/channels';
 import { BaseChannel } from '@buuo/core/channels';
 import type { ChannelPlugin, PluginContext } from '@buuo/core/plugins';

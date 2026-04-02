@@ -2,12 +2,8 @@
  * BaseProvider tests
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { BaseProvider } from './base.js';
-import {
-  ProviderAlreadyInitializedError,
-  ProviderNotInitializedError
-} from './errors.js';
 import type { ChatRequest, ChatResponse } from './interface.js';
 
 class TestProvider extends BaseProvider {
@@ -27,7 +23,7 @@ class TestProvider extends BaseProvider {
     };
   }
 
-  protected async *doChatStream(request: ChatRequest): AsyncIterable<ChatResponse> {
+  protected async *doChatStream(_request: ChatRequest): AsyncIterable<ChatResponse> {
     yield { content: 'Stream ', done: false };
     yield { content: 'response', done: false };
     yield {
@@ -79,7 +75,7 @@ describe('BaseProvider', () => {
       await provider.initialize({ apiKey: 'test-key' });
 
       await expect(provider.initialize({ apiKey: 'test-key' }))
-        .rejects.toThrow(ProviderAlreadyInitializedError);
+        .rejects.toThrow('already initialized');
     });
 
     it('should emit initialized event', async () => {
@@ -98,7 +94,7 @@ describe('BaseProvider', () => {
       };
 
       await expect(provider.chat(request))
-        .rejects.toThrow(ProviderNotInitializedError);
+        .rejects.toThrow('not initialized');
     });
 
     it('should handle chat request successfully', async () => {
@@ -147,7 +143,8 @@ describe('BaseProvider', () => {
         }
         expect.unreachable('Should have thrown error');
       } catch (error) {
-        expect(error).toBeInstanceOf(ProviderNotInitializedError);
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toContain('not initialized');
       }
     });
 
@@ -172,28 +169,25 @@ describe('BaseProvider', () => {
   });
 
   describe('Status', () => {
-    it('should return frozen status object', async () => {
+    it('should return a copy of status object', async () => {
       await provider.initialize({ apiKey: 'test-key', model: 'test-model' });
 
       const status = provider.getStatus();
 
-      // Attempting to modify frozen object should throw
-      expect(() => {
-        (status as any).state = 'modified';
-      }).toThrow();
-
-      // Internal status should remain unchanged
+      // Modifying returned object should not affect internal state
+      (status as any).state = 'modified';
       expect(provider.getStatus().state).toBe('ready');
     });
 
-    it('should return same cached status when unchanged', async () => {
+    it('should return independent copies on each call', async () => {
       await provider.initialize({ apiKey: 'test-key' });
 
       const status1 = provider.getStatus();
       const status2 = provider.getStatus();
 
-      // Should return the same frozen object (same reference)
-      expect(status1).toBe(status2);
+      // Each call returns a new object
+      expect(status1).not.toBe(status2);
+      expect(status1).toEqual(status2);
     });
   });
 

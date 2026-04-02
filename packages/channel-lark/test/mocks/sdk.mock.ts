@@ -15,7 +15,7 @@ export const MockWSClient = vi.fn().mockImplementation(() => ({
 }));
 
 // Mock Client
-export const MockClient = vi.fn().mockImplementation((config: any) => ({
+export const MockClient = vi.fn().mockImplementation((_config: any) => ({
   im: {
     message: {
       create: vi.fn().mockResolvedValue({

@@ -526,10 +526,10 @@ export class LarkChannel implements Channel {
     return {
       connected,
       state: connected ? 'connected' : 'disconnected',
-      info: {
+      info: connected ? {
         mode: 'WebSocket (no public IP required)',
-        appId: this.config.appId,
-      },
+        appId: this.config!.appId,
+      } : undefined,
     };
   }
 

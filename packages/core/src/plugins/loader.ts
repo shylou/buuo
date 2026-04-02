@@ -3,7 +3,7 @@
  * @module plugins
  */
 
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { existsSync } from 'node:fs';
 import type { Logger } from '../utils/logger.js';

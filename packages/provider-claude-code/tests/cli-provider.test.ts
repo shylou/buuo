@@ -15,7 +15,7 @@ function createMockChildProcess() {
   child.stdin = { write: vi.fn(), end: vi.fn() };
   child.pid = 12345;
   child.killed = false;
-  child.kill = vi.fn((sig?: string) => { child.killed = true; });
+  child.kill = vi.fn((_sig?: string) => { child.killed = true; });
   child.exitCode = null;
   child.signalCode = null;
   return child;
@@ -233,7 +233,6 @@ describe('ClaudeCodeProvider', () => {
       const mockChild = createMockChildProcess();
 
       // Capture args passed to spawnProcess
-      const originalSpawn = provider['spawnProcess'].bind(provider);
       vi.spyOn(provider as any, 'spawnProcess').mockImplementation((args: string[]) => {
         capturedArgs.push(...args);
         return mockChild;
@@ -313,6 +312,7 @@ describe('ClaudeCodeProvider', () => {
       setTimeout(() => mockChild.emit('close', 1), 10);
 
       await expect(async () => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         for await (const _ of stream) { /* drain */ }
       }).rejects.toThrow('Claude CLI failed (exit code: 1)');
     });

@@ -267,8 +267,18 @@ export class AgentSDKProvider extends BaseProvider {
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);
         if (abortController.signal.aborted) {
-          // Cancelled by user or timeout — end stream gracefully
-          this.log(`Stream aborted: ${errMsg.substring(0, 100)}`);
+          const isTimeout = this.cancelledSessions.has(buuoSessionId) === false;
+          if (isTimeout) {
+            // Timeout — notify user before ending stream
+            this.log(`Stream aborted (timeout): ${errMsg.substring(0, 100)}`);
+            yield {
+              content: '⏱️ Request timed out. The operation took too long and was automatically cancelled. Please try again or simplify your request.',
+              done: true,
+            };
+          } else {
+            // Cancelled by user — end stream gracefully
+            this.log(`Stream aborted (user cancel): ${errMsg.substring(0, 100)}`);
+          }
         } else {
           throw err;
         }

@@ -50,7 +50,7 @@ class MockProvider extends BaseProvider {
     };
   }
 
-  protected async *doChatStream(request: ChatRequest): AsyncIterable<ChatResponse> {
+  protected async *doChatStream(_request: ChatRequest): AsyncIterable<ChatResponse> {
     yield {
       content: 'Stream ',
       done: false
@@ -149,7 +149,7 @@ describe('MessageRouter', () => {
 
   it('should get channel for conversation', () => {
     router.registerChannel(channel);
-    const message = createMockMessage();
+    createMockMessage();
     router.registerChannel(channel);
 
     // After routing, the mapping should be established

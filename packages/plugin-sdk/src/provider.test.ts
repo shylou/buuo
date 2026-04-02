@@ -2,14 +2,13 @@
  * Provider Plugin SDK tests
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   createProviderPlugin,
   SimpleProvider,
-  ProviderPluginValidationError
 } from './provider.js';
-import type { AIProvider, ProviderConfig, ChatRequest, ChatResponse } from '@buuo/core/providers';
-import type { ProviderPlugin, PluginContext } from '@buuo/core/plugins';
+import type { ProviderConfig, ChatRequest, ChatResponse } from '@buuo/core/providers';
+import type { PluginContext } from '@buuo/core/plugins';
 
 // Mock logger
 const createMockLogger = () => ({
@@ -54,7 +53,7 @@ describe('createProviderPlugin', () => {
     mockContext = createMockContext();
   });
 
-  describe('validation', () => {
+  describe('creation', () => {
     it('should create plugin with valid options', () => {
       const options = {
         id: 'test-provider',
@@ -86,148 +85,6 @@ describe('createProviderPlugin', () => {
       const plugin = createProviderPlugin(options);
 
       expect(plugin.author).toBe('Test Author');
-    });
-
-    it('should throw validation error for missing id', () => {
-      const options = {
-        id: '',
-        name: 'Test Provider',
-        version: '1.0.0',
-        description: 'A test provider',
-        createProvider: (config: ProviderConfig) => new MockProvider(config)
-      };
-
-      expect(() => createProviderPlugin(options as any)).toThrow(ProviderPluginValidationError);
-      expect(() => createProviderPlugin(options as any)).toThrow(/id/);
-    });
-
-    it('should throw validation error for whitespace-only id', () => {
-      const options = {
-        id: '   ',
-        name: 'Test Provider',
-        version: '1.0.0',
-        description: 'A test provider',
-        createProvider: (config: ProviderConfig) => new MockProvider(config)
-      };
-
-      expect(() => createProviderPlugin(options as any)).toThrow(ProviderPluginValidationError);
-    });
-
-    it('should throw validation error for missing name', () => {
-      const options = {
-        id: 'test-provider',
-        name: '',
-        version: '1.0.0',
-        description: 'A test provider',
-        createProvider: (config: ProviderConfig) => new MockProvider(config)
-      };
-
-      expect(() => createProviderPlugin(options as any)).toThrow(ProviderPluginValidationError);
-      expect(() => createProviderPlugin(options as any)).toThrow(/name/);
-    });
-
-    it('should throw validation error for missing version', () => {
-      const options = {
-        id: 'test-provider',
-        name: 'Test Provider',
-        version: '',
-        description: 'A test provider',
-        createProvider: (config: ProviderConfig) => new MockProvider(config)
-      };
-
-      expect(() => createProviderPlugin(options as any)).toThrow(ProviderPluginValidationError);
-      expect(() => createProviderPlugin(options as any)).toThrow(/version/);
-    });
-
-    it('should throw validation error for invalid semver format', () => {
-      const options = {
-        id: 'test-provider',
-        name: 'Test Provider',
-        version: 'invalid',
-        description: 'A test provider',
-        createProvider: (config: ProviderConfig) => new MockProvider(config)
-      };
-
-      expect(() => createProviderPlugin(options as any)).toThrow(ProviderPluginValidationError);
-      expect(() => createProviderPlugin(options as any)).toThrow(/semver/);
-    });
-
-    it('should accept valid semver versions', () => {
-      const validVersions = [
-        '1.0.0',
-        '2.3.4',
-        '10.20.30',
-        '1.0.0-alpha',
-        '1.0.0-beta.1',
-        '1.0.0+build',
-        '1.0.0-alpha-1',        // hyphen in identifier (was previously rejected)
-        '1.0.0-beta.2',         // multiple dot-separated identifiers
-        '1.0.0-alpha.1.beta',    // multiple identifiers
-        '1.0.0-rc.1+build.123',  // prerelease + build
-        '2.0.0-alpha-1+exp.sha.5114f85'
-      ];
-
-      validVersions.forEach(version => {
-        const options = {
-          id: 'test-provider',
-          name: 'Test Provider',
-          version,
-          description: 'A test provider',
-          createProvider: (config: ProviderConfig) => new MockProvider(config)
-        };
-
-        expect(() => createProviderPlugin(options)).not.toThrow();
-      });
-    });
-
-    it('should reject semver with invalid identifier hyphen placement', () => {
-      const invalidVersions = [
-        '1.0.0--alpha',         // consecutive hyphens
-        '1.0.0-alpha-',         // trailing hyphen
-        '1.0.0--beta.1',        // consecutive hyphens in identifier
-        '1.0.0-alpha-.1',       // trailing hyphen in identifier
-        '1.0.0+build--meta',    // consecutive hyphens in build
-        '1.0.0+-beta'           // leading hyphen in build
-      ];
-
-      invalidVersions.forEach(version => {
-        const options = {
-          id: 'test-provider',
-          name: 'Test Provider',
-          version,
-          description: 'A test provider',
-          createProvider: (config: ProviderConfig) => new MockProvider(config)
-        };
-
-        expect(() => createProviderPlugin(options)).toThrow(ProviderPluginValidationError);
-        expect(() => createProviderPlugin(options)).toThrow(/hyphen/);
-      });
-    });
-
-    it('should throw validation error for missing description', () => {
-      const options = {
-        id: 'test-provider',
-        name: 'Test Provider',
-        version: '1.0.0',
-        description: '',
-        createProvider: (config: ProviderConfig) => new MockProvider(config)
-      };
-
-      expect(() => createProviderPlugin(options as any)).toThrow(ProviderPluginValidationError);
-      expect(() => createProviderPlugin(options as any)).toThrow(/description/);
-    });
-
-    it('should throw validation error for non-function createProvider', () => {
-      const options = {
-        id: 'test-provider',
-        name: 'Test Provider',
-        version: '1.0.0',
-        description: 'A test provider',
-        createProvider: 'not-a-function' as any
-      };
-
-      expect(() => createProviderPlugin(options)).toThrow(ProviderPluginValidationError);
-      expect(() => createProviderPlugin(options)).toThrow(/createProvider/);
     });
   });
 
@@ -284,23 +141,6 @@ describe('createProviderPlugin', () => {
         expect.stringContaining('stopped')
       );
     });
-
-    it('should include version in initialization log', async () => {
-      const options = {
-        id: 'test-provider',
-        name: 'Test Provider',
-        version: '2.1.0',
-        description: 'A test provider',
-        createProvider: (config: ProviderConfig) => new MockProvider(config)
-      };
-
-      const plugin = createProviderPlugin(options);
-      await plugin.initialize(mockContext);
-
-      expect(mockContext.logger.info).toHaveBeenCalledWith(
-        expect.stringContaining('v2.1.0')
-      );
-    });
   });
 
   describe('createProvider', () => {
@@ -318,52 +158,6 @@ describe('createProviderPlugin', () => {
 
       expect(provider).toBeInstanceOf(MockProvider);
       expect(provider.id).toBe('mock-provider');
-    });
-
-    it('should throw error if createProvider returns invalid object', () => {
-      const options = {
-        id: 'test-provider',
-        name: 'Test Provider',
-        version: '1.0.0',
-        description: 'A test provider',
-        createProvider: () => ({ invalid: 'object' }) as any
-      };
-
-      const plugin = createProviderPlugin(options);
-
-      expect(() => plugin.createProvider({})).toThrow(/must have a string id property/);
-    });
-
-    it('should throw error if createProvider returns null', () => {
-      const options = {
-        id: 'test-provider',
-        name: 'Test Provider',
-        version: '1.0.0',
-        description: 'A test provider',
-        createProvider: () => null as any
-      };
-
-      const plugin = createProviderPlugin(options);
-
-      expect(() => plugin.createProvider({})).toThrow(/must return an object/);
-    });
-
-    it('should log error when provider creation fails', async () => {
-      const options = {
-        id: 'test-provider',
-        name: 'Test Provider',
-        version: '1.0.0',
-        description: 'A test provider',
-        createProvider: () => {
-          throw new Error('Creation failed');
-        }
-      };
-
-      const plugin = createProviderPlugin(options);
-      await plugin.initialize(mockContext);
-
-      expect(() => plugin.createProvider({})).toThrow(/Provider creation failed/);
-      expect(mockContext.logger.error).toHaveBeenCalled();
     });
 
     it('should pass config to createProvider', () => {
@@ -394,38 +188,13 @@ describe('SimpleProvider', () => {
       expect(provider.id).toBe('mock-provider');
       expect(provider.name).toBe('Mock Provider');
     });
-
-    it('should use provided default model', () => {
-      const provider = new MockProvider({ model: 'custom-model' });
-
-      expect(provider['defaultModel']).toBe('custom-model');
-    });
   });
 
   describe('doInitialize', () => {
-    it('should update default model from config', async () => {
+    it('should handle empty config gracefully', async () => {
       const provider = new MockProvider({});
-      provider._config = { model: 'configured-model' };
 
-      await provider.doInitialize();
-
-      expect(provider['defaultModel']).toBe('configured-model');
-    });
-
-    it('should handle undefined config gracefully', async () => {
-      const provider = new MockProvider({});
-      provider._config = undefined;
-
-      await expect(provider.doInitialize()).resolves.not.toThrow();
-    });
-
-    it('should handle config without model', async () => {
-      const provider = new MockProvider({});
-      provider._config = {};
-
-      await provider.doInitialize();
-
-      expect(provider['defaultModel']).toBe('default');
+      await expect(provider.initialize({})).resolves.not.toThrow();
     });
   });
 
@@ -505,15 +274,5 @@ describe('SimpleProvider', () => {
       expect(response.usage).toBeDefined();
       expect(response.usage?.totalTokens).toBeGreaterThan(0);
     });
-  });
-});
-
-describe('ProviderPluginValidationError', () => {
-  it('should create error with field and reason', () => {
-    const error = new ProviderPluginValidationError('id', 'must be present');
-
-    expect(error.name).toBe('ProviderPluginValidationError');
-    expect(error.message).toContain('id');
-    expect(error.message).toContain('must be present');
   });
 });

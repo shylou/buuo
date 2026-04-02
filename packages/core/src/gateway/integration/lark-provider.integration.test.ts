@@ -75,7 +75,7 @@ class MockLarkChannel extends EventEmitter implements Channel {
   sentMessages: OutgoingMessage[] = [];
   updatedMessages: Array<{ messageId: string; content: string; conversationId?: string }> = [];
 
-  async initialize(config: any): Promise<void> {
+  async initialize(_config: any): Promise<void> {
     this.initialized = true;
   }
 
@@ -123,7 +123,7 @@ class MockClaudeCodeProvider extends EventEmitter implements AIProvider {
   chatHistory: any[] = [];
   public trackedMessageIds = new Set<string>();
 
-  async initialize(config: any): Promise<void> {
+  async initialize(_config: any): Promise<void> {
     this.initialized = true;
   }
 

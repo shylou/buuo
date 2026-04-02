@@ -161,7 +161,7 @@ describe('AuthManager', () => {
   });
 
   it('should check admin permissions', async () => {
-    const user = await auth.pairUser('admin-user');
+    await auth.pairUser('admin-user');
 
     expect(auth.hasPermission('admin-user', 'any:permission')).toBe(true);
   });

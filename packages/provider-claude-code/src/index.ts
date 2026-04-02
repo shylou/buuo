@@ -5,7 +5,7 @@
  * Also supports Agent SDK for real-time bidirectional conversation.
  */
 
-import type { ProviderPlugin, ProviderPluginConfig } from '@buuo/core/plugins';
+import type { ProviderPlugin } from '@buuo/core/plugins';
 import { ClaudeCodeProvider } from './cli-provider.js';
 import { AgentSDKProvider } from './sdk-provider.js';
 

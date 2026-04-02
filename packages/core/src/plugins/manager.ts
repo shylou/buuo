@@ -4,7 +4,7 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
-import type { Plugin, PluginContext, PluginType, ValidationResult } from './interface.js';
+import type { Plugin, PluginContext, PluginType } from './interface.js';
 import type { Logger } from '../utils/logger.js';
 
 export interface PluginLoadResult {
@@ -97,7 +97,7 @@ export class PluginManager extends EventEmitter {
 
     this.logger.info('Loading all plugins', { totalPlugins });
 
-    for (const [id, plugin] of this.plugins) {
+    for (const id of this.plugins.keys()) {
       try {
         await this.load(id);
         results.push({ id, success: true });

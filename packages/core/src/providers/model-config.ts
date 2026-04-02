@@ -33,11 +33,13 @@ export const MODEL_DISPLAY_NAMES: Record<string, string> = {
 
 /** Check if a model alias is valid */
 export function isValidModelAlias(alias: string): boolean {
+  if (typeof alias !== 'string') return false;
   return MODEL_ALIASES.hasOwnProperty(alias.toLowerCase());
 }
 
 /** Get model ID from alias */
 export function getModelId(alias: string): string | undefined {
+  if (typeof alias !== 'string') return undefined;
   return MODEL_ALIASES[alias.toLowerCase()];
 }
 
@@ -46,6 +48,7 @@ export function getModelId(alias: string): string | undefined {
  * Used by providers that need aliases (e.g., Agent SDK) to read from settings.json
  */
 export function getModelAlias(modelId: string): string {
+  if (typeof modelId !== 'string') return modelId;
   // If already an alias, return as is
   const lowerModel = modelId.toLowerCase();
   if (['default', 'haiku', 'sonnet', 'opus'].includes(lowerModel)) {

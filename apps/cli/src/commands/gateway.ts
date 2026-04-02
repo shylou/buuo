@@ -8,7 +8,7 @@ import { createLogger } from '@buuo/core';
 import { ConfigStore } from '@buuo/core';
 import { PluginManager } from '@buuo/core';
 import { Gateway } from '@buuo/core';
-import { resolve, join, dirname } from 'node:path';
+import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Get the directory name of the current module
@@ -153,7 +153,7 @@ gatewayCommand
   .command('status')
   .description('Show gateway status')
   .option('-c, --config <path>', 'Configuration file path', 'config/default.config.yaml')
-  .action(async (options) => {
+  .action(async (_options) => {
     console.log(chalk.cyan('🦐 Buuo Gateway Status'));
     console.log(chalk.gray('─'.repeat(40)));
 

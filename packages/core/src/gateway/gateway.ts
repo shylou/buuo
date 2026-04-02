@@ -5,7 +5,7 @@
 
 import { EventEmitter } from 'eventemitter3';
 import type { Channel, IncomingMessage } from '../channels/interface.js';
-import type { AIProvider, ChatResponse } from '../providers/interface.js';
+import type { AIProvider } from '../providers/interface.js';
 import type { PluginManager } from '../plugins/manager.js';
 import type { ConfigStore } from '../config/store.js';
 import type { Logger } from '../utils/logger.js';

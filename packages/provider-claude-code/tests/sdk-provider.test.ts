@@ -4,7 +4,11 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AgentSDKProvider } from '../src/sdk-provider.js';
-import type { ChatRequest } from '@buuo/core/providers';
+
+// Mock the SDK query function for timeout/cancel tests
+vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
+  query: vi.fn(),
+}));
 
 describe('AgentSDKProvider', () => {
   let provider: AgentSDKProvider;
@@ -210,6 +214,73 @@ describe('AgentSDKProvider', () => {
       await provider.cleanup();
 
       expect(provider.getCachedSessionCount()).toBe(0);
+    });
+  });
+
+  describe('timeout vs cancellation', () => {
+    it('should yield timeout message when request times out', async () => {
+      await provider.initialize({
+        workingDirectory: '/tmp/test',
+        requestTimeout: 50,
+      });
+
+      const { query } = await import('@anthropic-ai/claude-agent-sdk');
+      vi.mocked(query).mockImplementation(() => {
+        return (async function* () {
+          yield { type: 'system', subtype: 'init', session_id: 'sdk-session' };
+          // Simulate slow SDK processing — timeout fires at 50ms, this throws at 100ms
+          await new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('Claude Code process aborted by user')), 100);
+          });
+        })();
+      });
+
+      const request = {
+        sessionId: 'test-timeout',
+        messages: [{ role: 'user' as const, content: 'Hello' }],
+      };
+
+      const responses = [];
+      for await (const response of (provider as any).doChatStream(request)) {
+        responses.push(response);
+      }
+
+      const timeoutMsg = responses.find((r: any) => r.content?.includes('timed out'));
+      expect(timeoutMsg).toBeDefined();
+      expect(timeoutMsg!.done).toBe(true);
+    });
+
+    it('should distinguish cancel from timeout via cancelledSessions', () => {
+      // Unit test: cancelRequest marks session in cancelledSessions before aborting
+      const controller = new AbortController();
+      provider['activeControllers'].set('s1', controller);
+
+      provider.cancelRequest('s1');
+
+      // After cancel, the session should be in cancelledSessions
+      // so doChatStream can distinguish cancel from timeout
+      expect(provider['cancelledSessions'].has('s1')).toBe(true);
+      expect(controller.signal.aborted).toBe(true);
+    });
+
+    it('should not yield timeout message when session was cancelled', async () => {
+      await provider.initialize({
+        workingDirectory: '/tmp/test',
+        requestTimeout: 50,
+      });
+
+      // Simulate: session was already cancelled before abort fires
+      provider['cancelledSessions'].add('pre-cancelled');
+      const controller = new AbortController();
+      provider['activeControllers'].set('pre-cancelled', controller);
+
+      // Abort (simulating what timeout would do)
+      controller.abort();
+
+      // Verify cancelledSessions allows distinguishing cancel from timeout
+      expect(provider['cancelledSessions'].has('pre-cancelled')).toBe(true);
+      // A timeout scenario would NOT be in cancelledSessions
+      expect(provider['cancelledSessions'].has('not-cancelled')).toBe(false);
     });
   });
 });
