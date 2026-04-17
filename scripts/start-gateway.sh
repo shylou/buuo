@@ -19,11 +19,20 @@ CLI="$BUUO_DIR/apps/cli/dist/cli.js"
 
 cd "$BUUO_DIR"
 
+read_pid() {
+    if [ -f "$PID_FILE" ]; then
+        tr -d '[:space:]' < "$PID_FILE"
+    fi
+}
+
 # Check if gateway is running
 is_running() {
     if [ -f "$PID_FILE" ]; then
-        local pid=$(cat "$PID_FILE")
-        ps -p "$pid" > /dev/null 2>&1 && return 0
+        local pid
+        pid=$(read_pid)
+        if [ -n "$pid" ] && ps -p "$pid" > /dev/null 2>&1; then
+            return 0
+        fi
     fi
     return 1
 }
@@ -39,18 +48,29 @@ start_gateway() {
 
     # Build
     echo -e "${BLUE}📦 Building...${NC}"
-    pnpm --filter '@buuo/provider-claude-code' build 2>/dev/null || true
-    pnpm --filter '@buuo/cli' build 2>/dev/null || true
+    pnpm --filter '@buuo/provider-claude-code' build
+    pnpm --filter '@buuo/channel-lark' build
+    pnpm --filter '@buuo/provider-codex' build
+    pnpm --filter '@buuo/cli' build
 
-    # Start
-    nohup node "$CLI" gateway start > "$LOG_FILE" 2>&1 &
-    local pid=$!
-    echo $pid > "$PID_FILE"
+    # Recreate log file to avoid stale bytes from previous runs confusing diagnosis
+    rm -f "$LOG_FILE"
 
-    sleep 2
+    # Forward an explicitly provided proxy into the daemon when needed by the host environment.
+    if [ -n "${BUUO_HTTP_PROXY:-}" ]; then
+        export HTTP_PROXY="$BUUO_HTTP_PROXY"
+        export HTTPS_PROXY="$BUUO_HTTP_PROXY"
+        export http_proxy="$BUUO_HTTP_PROXY"
+        export https_proxy="$BUUO_HTTP_PROXY"
+    fi
+
+    # Start in a detached session so the gateway survives parent shell exit
+    setsid nohup node "$CLI" gateway start --daemon </dev/null > "$LOG_FILE" 2>&1 &
+
+    sleep 3
 
     if is_running; then
-        echo -e "${GREEN}✓ Started${NC} (PID: $(cat $PID_FILE))"
+        echo -e "${GREEN}✓ Started${NC} (PID: $(read_pid))"
         echo -e "  Log: $LOG_FILE"
     else
         echo -e "${RED}✗ Failed${NC}"
@@ -69,14 +89,15 @@ stop_gateway() {
         return 0
     }
 
-    local pid=$(cat "$PID_FILE")
+    local pid
+    pid=$(read_pid)
     kill -TERM "$pid" 2>/dev/null || true
 
     # Wait for graceful shutdown
     for i in {1..10}; do
         ps -p "$pid" > /dev/null 2>&1 || {
             echo -e "${GREEN}✓ Stopped${NC}"
-            rm -f "$PID_FILE"
+            [ -f "$PID_FILE" ] && rm -f "$PID_FILE"
             return 0
         }
         sleep 1
@@ -84,7 +105,7 @@ stop_gateway() {
 
     # Force kill if needed
     kill -KILL "$pid" 2>/dev/null || true
-    rm -f "$PID_FILE"
+    [ -f "$PID_FILE" ] && rm -f "$PID_FILE"
     echo -e "${GREEN}✓ Stopped (forced)${NC}"
 }
 
@@ -94,11 +115,13 @@ status_gateway() {
     echo "────────────────────────────"
 
     if is_running; then
-        local pid=$(cat "$PID_FILE")
+        local pid
+        pid=$(read_pid)
         echo -e "${GREEN}● Running${NC}"
         echo "  PID: $pid"
         echo "  Uptime: $(ps -o etime= -p $pid | tr -d ' ')"
     else
+        [ -f "$PID_FILE" ] && rm -f "$PID_FILE"
         echo -e "${RED}○ Stopped${NC}"
     fi
 }

@@ -71,21 +71,23 @@ describe('LarkChannel - initialize()', () => {
     await channel.initialize(minimalValidConfig);
 
     // Approach 1: Assert constructor was called with correct parameters
-    expect(MockClient).toHaveBeenCalledWith({
+    expect(MockClient).toHaveBeenCalledWith(expect.objectContaining({
       appId: 'cli_test_app_id',
       appSecret: 'test_app_secret_12345',
-      loggerLevel: expect.any(Number), // LoggerLevel.error
-    });
+      domain: 0,
+      httpInstance: expect.any(Object),
+      loggerLevel: expect.any(Number),
+    }));
   });
 
   it('should create Client with optional parameters', async () => {
     await channel.initialize(validChannelConfig);
 
-    expect(MockClient).toHaveBeenCalledWith({
+    expect(MockClient).toHaveBeenCalledWith(expect.objectContaining({
       appId: 'cli_test_app_id',
       appSecret: 'test_app_secret_12345',
       loggerLevel: expect.any(Number),
-    });
+    }));
   });
 });
 
@@ -110,7 +112,9 @@ describe('LarkChannel - start()', () => {
       expect.objectContaining({
         appId: 'cli_test_app_id',
         appSecret: 'test_app_secret_12345',
-        domain: 'https://open.feishu.cn',
+        domain: 0,
+        agent: expect.any(Object),
+        httpInstance: expect.any(Object),
       })
     );
   });

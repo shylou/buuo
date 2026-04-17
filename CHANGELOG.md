@@ -5,6 +5,28 @@ All notable changes to Buuo will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1] - 2026-04-17
+
+### Added
+- **Codex CLI Provider** for local Codex integration via `codex exec --json`
+- **Built-in Codex plugin registration** in the CLI gateway
+- **Provider-aware `/model` behavior**
+  - Claude providers continue to use aliases: `default`, `haiku`, `sonnet`, `opus`
+  - Codex provider accepts raw model strings such as `gpt-5.4` and `gpt-5.4-mini`
+- **Gateway runtime status command** with PID-based running/stale state detection
+- **Single-instance gateway tests** and Codex routing / integration regression coverage
+
+### Changed
+- **Default provider request timeout increased** from 5 minutes to 10 minutes
+- **README and provider docs updated** for Codex support, provider switching, and provider-aware model usage
+- **Gateway routing logs improved** to always record the resolved provider and model values
+
+### Fixed
+- **Gateway shutdown cleanup** now cleans provider-owned timers and subprocesses
+- **PID file handling** now prevents stale PID deletion races and multiple active gateway instances
+- **Startup script reliability** now fails fast on build errors instead of silently starting stale artifacts
+- **Lark WebSocket transport stability** improved with explicit SDK HTTP handling
+
 ## [2.0.1] - 2026-03-17
 
 ### Breaking Changes

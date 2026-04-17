@@ -10,10 +10,80 @@ import { PluginManager } from '@buuo/core';
 import { Gateway } from '@buuo/core';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { Logger } from '@buuo/core';
 
 // Get the directory name of the current module
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const PID_FILE_NAME = '.buuo_gateway.pid';
+
+export function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error: any) {
+    if (error?.code === 'ESRCH') {
+      return false;
+    }
+    throw error;
+  }
+}
+
+export function readPidFile(fs: typeof import('node:fs'), pidFile: string): number | undefined {
+  if (!fs.existsSync(pidFile)) {
+    return undefined;
+  }
+
+  const raw = fs.readFileSync(pidFile, 'utf-8').trim();
+  const pid = Number.parseInt(raw, 10);
+  return Number.isNaN(pid) ? undefined : pid;
+}
+
+export function claimPidFile(fs: typeof import('node:fs'), pidFile: string, logger: Logger): void {
+  const existingPid = readPidFile(fs, pidFile);
+
+  if (existingPid !== undefined && existingPid !== process.pid) {
+    if (isProcessRunning(existingPid)) {
+      throw new Error(`Gateway is already running with PID ${existingPid}`);
+    }
+
+    logger.warn(`Removing stale PID file for non-running process ${existingPid}`);
+    fs.unlinkSync(pidFile);
+  }
+
+  fs.writeFileSync(pidFile, process.pid.toString());
+}
+
+export function cleanupPidFile(fs: typeof import('node:fs'), pidFile: string, pid: number): void {
+  const recordedPid = readPidFile(fs, pidFile);
+  if (recordedPid === pid && fs.existsSync(pidFile)) {
+    fs.unlinkSync(pidFile);
+  }
+}
+
+export interface GatewayRuntimeStatus {
+  running: boolean;
+  pid?: number;
+  stalePid: boolean;
+}
+
+export function getGatewayRuntimeStatus(
+  fs: typeof import('node:fs'),
+  pidFile: string
+): GatewayRuntimeStatus {
+  const pid = readPidFile(fs, pidFile);
+
+  if (pid === undefined) {
+    return { running: false, stalePid: false };
+  }
+
+  if (isProcessRunning(pid)) {
+    return { running: true, pid, stalePid: false };
+  }
+
+  cleanupPidFile(fs, pidFile, pid);
+  return { running: false, pid, stalePid: true };
+}
 
 export const gatewayCommand = new Command('gateway')
   .description('Gateway commands')
@@ -26,6 +96,9 @@ gatewayCommand
   .option('-d, --daemon', 'Run as daemon')
   .action(async (options) => {
     console.log(chalk.cyan('🦐 Buuo Gateway starting...'));
+    const fs = await import('node:fs');
+    const pidFile = resolve(PID_FILE_NAME);
+    let pidClaimed = false;
 
     try {
       // Load environment variables from .env file
@@ -42,6 +115,9 @@ gatewayCommand
         level: 'info',
         usePino: false  // Use ConsoleLogger for consistent format
       });
+
+      claimPidFile(fs, pidFile, logger);
+      pidClaimed = true;
 
       // Load configuration
       const configPath = resolve(options.config);
@@ -78,6 +154,16 @@ gatewayCommand
         logger.info('Registered built-in plugin: @buuo/provider-claude-code');
       } catch (error) {
         logger.warn(`Failed to load Claude Code provider plugin: ${error}`);
+      }
+
+      try {
+        // Import Codex provider plugin
+        const codexProviderPath = resolve(__dirname, '../../../../packages/provider-codex/dist/index.js');
+        const { CodexProviderPlugin } = await import(codexProviderPath);
+        await pluginManager.register(new CodexProviderPlugin());
+        logger.info('Registered built-in plugin: @buuo/provider-codex');
+      } catch (error) {
+        logger.warn(`Failed to load Codex provider plugin: ${error}`);
       }
 
       // Create gateway - merge gateway config with router and session configs
@@ -122,28 +208,23 @@ gatewayCommand
         process.exit(0);
       };
 
-      // Save PID file for stop command
-      const fs = await import('node:fs');
-      const pidFile = resolve('.buuo_gateway.pid');
-      fs.writeFileSync(pidFile, process.pid.toString());
       console.log(chalk.gray(`PID file created: ${pidFile}`));
 
       // Clean up PID file on exit
-      const cleanupPidFile = () => {
-        if (fs.existsSync(pidFile)) {
-          fs.unlinkSync(pidFile);
-        }
-      };
+      const cleanupOwnPidFile = () => cleanupPidFile(fs, pidFile, process.pid);
 
       process.on('SIGINT', shutdown);
       process.on('SIGTERM', shutdown);
-      process.on('exit', cleanupPidFile);
+      process.on('exit', cleanupOwnPidFile);
 
       if (!options.daemon) {
         console.log(chalk.gray('Press Ctrl+C to stop'));
       }
 
     } catch (error) {
+      if (pidClaimed) {
+        cleanupPidFile(fs, pidFile, process.pid);
+      }
       console.error(chalk.red('Failed to start gateway:'), error);
       process.exit(1);
     }
@@ -154,13 +235,25 @@ gatewayCommand
   .description('Show gateway status')
   .option('-c, --config <path>', 'Configuration file path', 'config/default.config.yaml')
   .action(async (_options) => {
+    const fs = await import('node:fs');
+    const pidFile = resolve(PID_FILE_NAME);
+    const status = getGatewayRuntimeStatus(fs, pidFile);
+
     console.log(chalk.cyan('🦐 Buuo Gateway Status'));
     console.log(chalk.gray('─'.repeat(40)));
 
-    // This would connect to a running gateway
-    // For now, just show a placeholder
-    console.log(chalk.yellow('Gateway status command requires running gateway'));
-    console.log(chalk.gray('Use "buuo gateway start" to start the gateway'));
+    if (status.running) {
+      console.log(chalk.green('● Running'));
+      console.log(chalk.gray(`PID: ${status.pid}`));
+      return;
+    }
+
+    if (status.stalePid) {
+      console.log(chalk.yellow('○ Stopped (removed stale PID file)'));
+      return;
+    }
+
+    console.log(chalk.red('○ Stopped'));
   });
 
 gatewayCommand
@@ -170,7 +263,7 @@ gatewayCommand
     console.log(chalk.yellow('🛑 Stopping gateway...'));
 
     const fs = await import('node:fs');
-    const pidFile = resolve('.buuo_gateway.pid');
+    const pidFile = resolve(PID_FILE_NAME);
 
     // Check if PID file exists
     if (fs.existsSync(pidFile)) {

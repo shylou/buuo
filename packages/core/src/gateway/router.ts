@@ -79,7 +79,6 @@ export class MessageRouter {
   /** Default configuration constants */
   private readonly DEFAULTS = {
     PROVIDER_ID: 'default',
-    MODEL: 'default',
     TEMPERATURE: 0.7,
     MAX_TOKENS: 4096,
     STREAM: true
@@ -150,11 +149,18 @@ export class MessageRouter {
     this.conversationChannel.set(message.conversationId, message.metadata?.channelId as string);
 
     // Get provider with fallback logic
-    let providerId = session.data.providerId as string ?? this.options.defaultProvider ?? this.DEFAULTS.PROVIDER_ID;
+    const requestedProviderId = session.data.providerId as string | undefined;
+    let providerId = requestedProviderId ?? this.options.defaultProvider ?? this.DEFAULTS.PROVIDER_ID;
     let provider = this.providerMap.get(providerId);
 
     // If provider not found, try default provider
     if (!provider && providerId !== this.DEFAULTS.PROVIDER_ID) {
+      this.logger?.warn('Requested provider unavailable, falling back to default provider', {
+        sessionId: session.id,
+        conversationId: message.conversationId,
+        requestedProviderId: providerId,
+        fallbackProviderId: this.options.defaultProvider ?? this.DEFAULTS.PROVIDER_ID,
+      });
       providerId = this.options.defaultProvider ?? this.DEFAULTS.PROVIDER_ID;
       provider = this.providerMap.get(providerId);
     }
@@ -187,15 +193,28 @@ export class MessageRouter {
     }];
 
     // Build chat request with session and defaults
-    const model = session.data.model as string || this.DEFAULTS.MODEL;
+    const model = session.data.model as string | undefined;
     const request: ChatRequest = {
       sessionId: session.id,
       messages: messages,
       systemPrompt: session.data.systemPrompt as string ?? this.options.systemPrompt,
       temperature: session.data.temperature as number ?? this.options.temperature ?? this.DEFAULTS.TEMPERATURE,
       maxTokens: session.data.maxTokens as number ?? this.options.maxTokens ?? this.DEFAULTS.MAX_TOKENS,
-      model: getModelForProvider(model, provider.id)
+      model: model ? getModelForProvider(model, provider) : undefined
     };
+
+    const effectiveModel = request.model ?? provider.getStatus().model ?? 'provider-default';
+
+    this.logger?.info('Message routed', {
+      messageId: message.id,
+      conversationId: message.conversationId,
+      sessionId: session.id,
+      providerId,
+      requestedProviderId: providerId,
+      requestedModel: effectiveModel,
+      effectiveModel,
+      stream: this.options.stream ?? this.DEFAULTS.STREAM,
+    });
 
     this.logger?.debug('Chat request prepared', {
       sessionId: session.id,

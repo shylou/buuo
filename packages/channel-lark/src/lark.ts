@@ -6,6 +6,7 @@ import https from 'node:https';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import axios, { type AxiosInstance } from 'axios';
 import type * as LarkSDK from '@larksuiteoapi/node-sdk';
 import type {
   Channel,
@@ -36,6 +37,17 @@ interface LarkTokenResponse {
   msg?: string;
   tenant_access_token?: string;
   expire?: number;
+}
+
+interface LarkSdkHttpInstance {
+  request<T = unknown>(opts: Record<string, unknown>): Promise<T>;
+  get<T = unknown>(url: string, opts?: Record<string, unknown>): Promise<T>;
+  delete<T = unknown>(url: string, opts?: Record<string, unknown>): Promise<T>;
+  head<T = unknown>(url: string, opts?: Record<string, unknown>): Promise<T>;
+  options<T = unknown>(url: string, opts?: Record<string, unknown>): Promise<T>;
+  post<T = unknown>(url: string, data?: unknown, opts?: Record<string, unknown>): Promise<T>;
+  put<T = unknown>(url: string, data?: unknown, opts?: Record<string, unknown>): Promise<T>;
+  patch<T = unknown>(url: string, data?: unknown, opts?: Record<string, unknown>): Promise<T>;
 }
 
 /** Constants for Lark channel configuration */
@@ -126,6 +138,9 @@ export class LarkChannel implements Channel {
   private initialized = false;
   private messageHandlers: Array<(message: IncomingMessage) => void | Promise<void>> = [];
   private _heartbeatTimer?: NodeJS.Timeout;
+  private sdkAxios?: AxiosInstance;
+  private sdkHttp?: LarkSdkHttpInstance;
+  private sdkAgent?: https.Agent;
   private tenantAccessToken?: string;
   private tokenExpireTime?: number;
   private imageCacheDir: string;
@@ -173,9 +188,20 @@ export class LarkChannel implements Channel {
 
     // Load and cache SDK (one-time import)
     this.sdk = await import('@larksuiteoapi/node-sdk');
+    this.sdkAgent = new https.Agent({ keepAlive: true });
+    // Bypass ambient HTTP(S)_PROXY so Feishu long-connection setup is direct.
+    this.sdkAxios = axios.create({
+      proxy: false,
+      timeout: 15000,
+      httpsAgent: this.sdkAgent,
+      httpAgent: this.sdkAgent,
+    });
+    this.sdkHttp = this.createSdkHttpWrapper(this.sdkAxios);
     this.client = new this.sdk.Client({
       appId: this.config.appId,
       appSecret: this.config.appSecret,
+      domain: this.sdk.Domain.Feishu,
+      httpInstance: this.sdkHttp,
       loggerLevel: this.sdk.LoggerLevel.error,
     });
 
@@ -202,10 +228,10 @@ export class LarkChannel implements Channel {
     this.wsClient = new sdk.WSClient({
       appId: this.config.appId,
       appSecret: this.config.appSecret,
+      agent: this.sdkAgent,
+      domain: sdk.Domain.Feishu,
+      httpInstance: this.sdkHttp,
       loggerLevel: sdk.LoggerLevel.warn, // Reduced from info
-      domain: 'https://open.feishu.cn',
-      retryInterval: LARK_CONSTANTS.RETRY_INTERVAL,
-      maxRetryCount: LARK_CONSTANTS.MAX_RETRY_COUNT,
     } as any);
 
     // Start WebSocket connection
@@ -215,6 +241,19 @@ export class LarkChannel implements Channel {
 
     // Start lightweight heartbeat monitoring
     this.startHeartbeat();
+  }
+
+  private createSdkHttpWrapper(client: AxiosInstance): LarkSdkHttpInstance {
+    return {
+      request: async <T>(opts: Record<string, unknown>) => (await client.request<T>(opts)).data,
+      get: async <T>(url: string, opts?: Record<string, unknown>) => (await client.get<T>(url, opts)).data,
+      delete: async <T>(url: string, opts?: Record<string, unknown>) => (await client.delete<T>(url, opts)).data,
+      head: async <T>(url: string, opts?: Record<string, unknown>) => (await client.head<T>(url, opts)).data,
+      options: async <T>(url: string, opts?: Record<string, unknown>) => (await client.options<T>(url, opts)).data,
+      post: async <T>(url: string, data?: unknown, opts?: Record<string, unknown>) => (await client.post<T>(url, data, opts)).data,
+      put: async <T>(url: string, data?: unknown, opts?: Record<string, unknown>) => (await client.put<T>(url, data, opts)).data,
+      patch: async <T>(url: string, data?: unknown, opts?: Record<string, unknown>) => (await client.patch<T>(url, data, opts)).data,
+    };
   }
 
   /**
@@ -748,4 +787,3 @@ export class LarkChannel implements Channel {
   }
 
 }
-

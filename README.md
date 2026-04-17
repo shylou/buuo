@@ -1,9 +1,9 @@
-# Buuo - Claude Code Local Integration Assistant
+# Buuo - Local AI Coding Assistant Gateway
 
-🦐 Personal AI assistant system connecting Feishu/Lark with Claude (CLI or SDK)
+🦐 Personal AI assistant system connecting Feishu/Lark with local coding agents such as Claude Code and Codex
 
 ```
-Feishu User ←→ Buuo Gateway ←→ Claude (CLI / Agent SDK)
+Feishu User ←→ Buuo Gateway ←→ Local AI Provider
                      ↓
           Session Management + Timeout Detection + Error Handling
 ```
@@ -12,7 +12,7 @@ Feishu User ←→ Buuo Gateway ←→ Claude (CLI / Agent SDK)
 
 ## ✨ Key Features
 
-- ✅ **Dual Provider Support**: Choose between CLI or Agent SDK
+- ✅ **Multiple Provider Support**: Claude Code CLI, Claude Agent SDK, and Codex CLI
 - ✅ **MCP Server Support**: Extend capabilities with external tools
 - ✅ **Feishu Integration**: WebSocket long connection, no public IP required
 - ✅ **Session Management**: Context retention with automatic cleanup
@@ -21,13 +21,11 @@ Feishu User ←→ Buuo Gateway ←→ Claude (CLI / Agent SDK)
 
 ## 📊 Provider Comparison
 
-| Feature | CLI Provider | Agent SDK Provider |
-|:--------|:-------------|:-------------------|
-| **MCP Config** | `claude.json` (user config dir) | `.mcp.json` (buuo directory) |
-| **Session Mode** | Resume mode (90% savings) | SDK-managed persistence |
-| **Streaming** | Parsed from CLI stdout | Native API streaming |
-| **Use When** | Local CLI, no API key | Simpler setup, direct API |
-| **Default** | No | ✅ Yes (v2.0.1+) |
+| Provider | Transport | Session Mode | Use When |
+|:---------|:----------|:-------------|:---------|
+| Claude Code CLI | Local CLI | Resume mode | You want Claude Code tooling with local CLI state |
+| Claude Agent SDK | Native SDK | SDK-managed persistence | You want direct Anthropic API integration |
+| Codex CLI | Local CLI | Resume mode | You want Feishu messages bridged into local Codex CLI |
 
 ## 📦 Prerequisites
 
@@ -42,14 +40,18 @@ npm install -g pnpm
 # - Create Feishu app, get App ID and App Secret
 # - Enable event subscription (long connection mode)
 
-# Optional: For CLI Provider
+# Optional: For Claude CLI Provider
 # npm install -g @anthropic-ai/claude-code
+
+# Optional: For Codex CLI Provider
+# install Codex CLI and run `codex login`
 ```
 
 > **💡 Provider Choice**
 >
-> - **Agent SDK Provider** (default): Requires `ANTHROPIC_API_KEY` environment variable
-> - **CLI Provider** (optional): Requires local Claude Code CLI installation
+> - **Agent SDK Provider** (current default): Requires provider-specific API configuration
+> - **Codex CLI Provider** (optional): Requires local `codex`, completed `codex login`, and host network access to Codex
+> - **Claude Code CLI Provider** (optional): Requires local Claude Code CLI installation
 ## 🚀 Quick Start
 
 ### 1. Install Dependencies
@@ -152,16 +154,21 @@ Buuo supports the following commands in Feishu/Lark:
 | Command | Description |
 |---------|-------------|
 | `/model` | Show current model and available models |
-| `/model <alias>` | Switch AI model for current session |
+| `/model <value>` | Switch AI model for current session |
 | `/cancel` | Cancel the active AI request |
 
-**Available Models:**
+**Claude session models:**
 - `default` - Default model (Sonnet 4.6)
 - `haiku` - Fast and cost-effective (Haiku 4)
 - `sonnet` - Balanced performance (Sonnet 4.6)
 - `opus` - Highest capability (Opus 4.6)
 
-Model settings are per-session, meaning different conversations can use different models.
+**Codex session models:**
+- `/model gpt-5.4`
+- `/model gpt-5.4-mini`
+- any other raw Codex model string supported by your local Codex CLI
+
+Model settings are per-session. Claude-family providers use aliases; Codex uses raw model strings.
 
 ## 🛡️ Tool Access Control
 
@@ -207,40 +214,31 @@ router:
 
 providers:
   claude-code-provider:
-    # CLI Provider (optional, disabled by default)
-    - id: claude-code
-      providerType: cli
-      workingDirectory: /root/opendev
-      enableTools: true
-      requestTimeout: 300000
-      allowedTools:
-        - Read
-        - Write
-        - Edit
-        - Grep
-        - Glob
-        - Bash(python3:*)
-        - Bash(git:*)
-        - mcp__context7__*
-        - mcp__jira__*
-
-    # Agent SDK Provider (default)
     - id: agent-sdk
+      enabled: true
       providerType: agent-sdk
       model: default
       workingDirectory: /root/opendev
-      requestTimeout: 300000
-      enableFileCheckpointing: false
-      allowedTools:
-        - Read
-        - Write
-        - Edit
-        - Grep
-        - Glob
-        - Bash
-        - WebSearch
-        - mcp__context7__*
-        - mcp__jira__*
+      requestTimeout: 600000
+
+    - id: claude-code
+      enabled: false
+      providerType: cli
+
+  # Codex remains available as an alternative provider.
+  codex-provider:
+    - id: codex-cli
+      enabled: false
+      providerType: cli
+      cliPath: codex
+      workingDirectory: /root/opendev
+      model: gpt-5.4
+      requestTimeout: 600000
+      fullAuto: true
+      skipGitRepoCheck: false
+      ephemeral: false
+      configOverrides:
+        - model_reasoning_effort="high"
 
 channels:
   lark-channel:
@@ -256,7 +254,7 @@ Edit `config/default.config.yaml`:
 
 ```yaml
 router:
-  defaultProvider: agent-sdk  # or 'claude-code'
+  defaultProvider: agent-sdk  # or 'claude-code' / 'codex-cli'
 ```
 
 Restart: `./scripts/start-gateway.sh restart`
@@ -294,7 +292,7 @@ Feishu Message → Lark Channel → Gateway → Session Manager
                                          Feishu User
 ```
 
-**Alternative Provider:** CLI Provider available (requires local Claude Code CLI)
+**Alternative Providers:** Claude Code CLI and Codex CLI are also available.
 
 ### Key Design Decisions
 
@@ -325,7 +323,8 @@ buuo/
 ├── packages/
 │   ├── core/                    # Core gateway and interfaces
 │   ├── channel-lark/            # Feishu/Lark integration
-│   ├── provider-claude-code/    # Claude Code CLI integration
+│   ├── provider-claude-code/    # Claude Code CLI + Agent SDK integration
+│   ├── provider-codex/          # Codex CLI integration
 │   └── plugin-sdk/              # Plugin development SDK
 ├── apps/
 │   └── cli/                     # Command-line tools

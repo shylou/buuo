@@ -10,6 +10,7 @@ import { AuthManager } from '../security/auth.js';
 import { PluginManager } from '../plugins/manager.js';
 import { ConfigStore } from '../config/store.js';
 import { createLogger } from '../utils/logger.js';
+import type { ChannelPlugin, ProviderPlugin, PluginContext } from '../plugins/interface.js';
 
 let testLogger: any;
 
@@ -41,6 +42,7 @@ class MockChannel extends BaseChannel {
 
 class MockProvider extends BaseProvider {
   _initialized = false;
+  cleanup = vi.fn(async () => {});
 
   constructor() {
     super('test-provider', 'Test Provider');
@@ -85,6 +87,42 @@ class MockProvider extends BaseProvider {
 
   estimateTokens(text: string): number {
     return Math.ceil(text.length / 4);
+  }
+}
+
+class TestChannelPlugin implements ChannelPlugin {
+  id = 'test-channel-plugin';
+  name = 'Test Channel Plugin';
+  version = '0.0.1';
+  description = 'Test channel plugin';
+  type = 'channel' as const;
+
+  async initialize(_context: PluginContext): Promise<void> {}
+  async start(): Promise<void> {}
+  async stop(): Promise<void> {}
+
+  createChannel(): import('../channels/index.js').Channel {
+    return new MockChannel();
+  }
+}
+
+class TestProviderPlugin implements ProviderPlugin {
+  id = 'test-provider-plugin';
+  name = 'Test Provider Plugin';
+  version = '0.0.1';
+  description = 'Test provider plugin';
+  type = 'provider' as const;
+
+  async initialize(_context: PluginContext): Promise<void> {}
+  async start(): Promise<void> {}
+  async stop(): Promise<void> {}
+
+  createProvider(config: { id?: string }): import('../providers/index.js').AIProvider {
+    const provider = new MockProvider();
+    if (config.id) {
+      (provider as { id: string }).id = config.id;
+    }
+    return provider;
   }
 }
 
@@ -193,7 +231,7 @@ describe('Gateway', () => {
       id: 'msg-1',
       userId: 'user-1',
       conversationId: 'conv-1',
-      content: '/model claude-3-5-sonnet',
+      content: '/model sonnet',
       timestamp: new Date(),
       metadata: { channelId: 'test-channel' }
     };
@@ -201,6 +239,98 @@ describe('Gateway', () => {
     await gateway.handleMessage(message);
 
     expect(channel.sentMessages.length).toBeGreaterThan(0);
+  });
+
+  it('should clean up providers when gateway stops', async () => {
+    const stopGateway = new Gateway({
+      router: {
+        defaultProvider: 'test-provider'
+      }
+    }, plugins, configStore, testLogger);
+
+    const stopChannel = new MockChannel();
+    const stopProvider = new MockProvider();
+    await stopProvider.initialize({});
+    stopGateway.registerProvider(stopProvider);
+    stopGateway.registerChannel(stopChannel);
+
+    await stopGateway.start();
+    await stopGateway.stop();
+
+    expect(stopProvider.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it('should accept a raw model string for codex sessions', async () => {
+    const session = await gateway.sessions.getOrCreate({
+      id: 'msg-seed',
+      userId: 'user-1',
+      conversationId: 'conv-codex',
+      content: 'seed',
+      timestamp: new Date(),
+      metadata: { channelId: 'test-channel' }
+    });
+    session.data.providerId = 'codex-cli';
+
+    await gateway.handleMessage({
+      id: 'msg-2',
+      userId: 'user-1',
+      conversationId: 'conv-codex',
+      content: '/model gpt-5.4-mini',
+      timestamp: new Date(),
+      metadata: { channelId: 'test-channel' }
+    });
+
+    expect(session.data.model).toBe('gpt-5.4-mini');
+    expect(channel.sentMessages.at(-1)?.content).toContain('gpt-5.4-mini');
+  });
+
+  it('should accept a raw model string for a new codex conversation before providerId is stored', async () => {
+    const codexGateway = new Gateway({
+      router: {
+        defaultProvider: 'codex-cli',
+        stream: false,
+      }
+    }, plugins, configStore, testLogger);
+
+    const codexProvider = new MockProvider();
+    (codexProvider as { id: string }).id = 'codex-cli';
+    (codexProvider as { name: string }).name = 'Codex CLI';
+
+    codexGateway.registerProvider(codexProvider);
+    codexGateway.registerChannel(channel);
+
+    await codexGateway.handleMessage({
+      id: 'msg-2b',
+      userId: 'user-1',
+      conversationId: 'conv-codex-fresh',
+      content: '/model gpt-5.4-mini',
+      timestamp: new Date(),
+      metadata: { channelId: 'test-channel' }
+    });
+
+    const session = await codexGateway.sessions.getOrCreate({
+      id: 'msg-2b-followup',
+      userId: 'user-1',
+      conversationId: 'conv-codex-fresh',
+      content: 'seed',
+      timestamp: new Date(),
+      metadata: { channelId: 'test-channel' }
+    });
+    expect(session?.data.model).toBe('gpt-5.4-mini');
+    expect(channel.sentMessages.at(-1)?.content).toContain('gpt-5.4-mini');
+  });
+
+  it('should reject unknown aliases for non-codex sessions', async () => {
+    await gateway.handleMessage({
+      id: 'msg-3',
+      userId: 'user-1',
+      conversationId: 'conv-unknown',
+      content: '/model gpt-5.4-mini',
+      timestamp: new Date(),
+      metadata: { channelId: 'test-channel' }
+    });
+
+    expect(channel.sentMessages.at(-1)?.content).toContain('未知模型');
   });
 
   it('should send thinking indicator', async () => {
@@ -330,5 +460,42 @@ describe('Gateway', () => {
 
     // Should have at least 2 response messages across both rounds
     expect(session!.messages.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('should skip disabled plugin components from config', async () => {
+    const pluginGateway = new Gateway({
+      router: {
+        defaultProvider: 'enabled-provider'
+      },
+      autoStartPlugins: false
+    }, plugins, configStore, testLogger);
+
+    (plugins as any).context.gateway = pluginGateway;
+    (plugins as any).context.events = pluginGateway;
+
+    configStore.merge({
+      channels: {
+        'test-channel-plugin': [
+          { token: 'enabled-channel' },
+          { token: 'disabled-channel', enabled: false }
+        ]
+      },
+      providers: {
+        'test-provider-plugin': [
+          { id: 'enabled-provider' },
+          { id: 'disabled-provider', enabled: false }
+        ]
+      }
+    } as any);
+
+    await plugins.register(new TestChannelPlugin());
+    await plugins.register(new TestProviderPlugin());
+
+    await pluginGateway.initialize();
+
+    expect(pluginGateway.router.getChannels()).toHaveLength(1);
+    expect(pluginGateway.router.getProviders()).toHaveLength(1);
+    expect(pluginGateway.router.getProvider('enabled-provider')).toBeDefined();
+    expect(pluginGateway.router.getProvider('disabled-provider')).toBeUndefined();
   });
 });

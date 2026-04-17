@@ -1,5 +1,5 @@
 # Buuo Gateway Configuration v2.0
-# Agent SDK Provider with MCP auto-loading from .mcp.json
+# Multi-provider gateway configuration (Claude Code / Agent SDK / Codex CLI)
 
 gateway:
   id: main_gateway
@@ -26,10 +26,11 @@ providers:
   claude-code-provider:
     # CLI-based Provider (Resume Mode)
     - id: claude-code
+      enabled: false
       providerType: cli
       workingDirectory: /root/opendev
       enableTools: true
-      requestTimeout: 300000
+      requestTimeout: 600000
       allowedTools:
         - Read
         - Write
@@ -49,14 +50,15 @@ providers:
         - mcp__zai-mcp-server__*
         - mcp__zread__*
 
-    # Agent SDK Provider (Default)
+    # Agent SDK Provider
     # workingDirectory: Where Agent SDK executes tasks (reads/writes files)
     # .mcp.json: Loaded from buuo project directory (contains MCP server configs)
     - id: agent-sdk
+      enabled: true
       providerType: agent-sdk
       model: default
       workingDirectory: /root/opendev
-      requestTimeout: 300000
+      requestTimeout: 600000
       enableFileCheckpointing: false
       # Copy .mcp.json.example to .mcp.json and configure your MCP servers
       allowedTools:
@@ -78,3 +80,17 @@ providers:
         - mcp__4_5v_mcp__*
         - mcp__zai-mcp-server__*
         - mcp__zread__*
+
+  codex-provider:
+    - id: codex-cli
+      enabled: false
+      providerType: cli
+      cliPath: codex
+      workingDirectory: /root/opendev
+      requestTimeout: 600000
+      model: gpt-5.4
+      fullAuto: true
+      skipGitRepoCheck: false
+      ephemeral: false
+      configOverrides:
+        - model_reasoning_effort="high"

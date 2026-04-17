@@ -21,6 +21,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "start": "node dist/cli.js",
     "cli": "tsx src/cli.ts"

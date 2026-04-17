@@ -35,7 +35,36 @@ Uses local Claude Code CLI installation.
     - mcp__*
 ```
 
-### 2. Agent SDK Provider (`agent-sdk`) - Default
+### 2. Codex CLI Provider (`codex-cli`)
+
+Uses local Codex CLI installation on the same host as Buuo.
+
+**Host prerequisites:**
+- `codex` is installed and available in `PATH`
+- `codex login` has already been completed for the same user running Buuo
+
+**Features:**
+- Resume Mode: Uses `codex exec resume <threadId>`
+- JSONL event streaming via `codex exec --json`
+- Local Codex sandbox and approval flow
+- No additional API integration inside Buuo
+
+**Configuration:**
+```yaml
+- id: codex-cli
+  providerType: cli
+  cliPath: codex
+  workingDirectory: /path/to/workspace
+  model: gpt-5.4
+  requestTimeout: 300000
+  fullAuto: true
+  skipGitRepoCheck: false
+  ephemeral: false
+  configOverrides:
+    - model_reasoning_effort="high"
+```
+
+### 3. Agent SDK Provider (`agent-sdk`)
 
 Uses Anthropic Agent SDK for direct API integration.
 
@@ -115,6 +144,34 @@ Create `.mcp.json` in buuo directory:
 |--------|------|---------|-------------|
 | `enableTools` | boolean | true | Enable Claude Code tool access |
 
+### Codex CLI Specific Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `cliPath` | string | `codex` | Path to Codex CLI |
+| `model` | string | `gpt-5.4` | Default model passed to Codex |
+| `sandbox` | string | `workspace-write` | Sandbox mode when `fullAuto` is false |
+| `fullAuto` | boolean | true | Use `--full-auto` convenience mode |
+| `dangerouslyBypassApprovalsAndSandbox` | boolean | false | Run without approvals or sandbox |
+| `skipGitRepoCheck` | boolean | false | Allow running outside a Git repository |
+| `profile` | string | undefined | Optional Codex profile from `config.toml` |
+| `ephemeral` | boolean | false | Disable session persistence on disk |
+| `configOverrides` | string[] | undefined | Additional `-c key=value` overrides |
+
+### `/model` Command Behavior
+
+- `agent-sdk` uses Claude-style aliases: `default`, `haiku`, `sonnet`, `opus`
+- `claude-code` keeps the same alias-oriented experience
+- `codex-cli` accepts raw model strings such as `gpt-5.4`
+
+Examples:
+
+```text
+/model sonnet
+/model gpt-5.4
+/model gpt-5.4-mini
+```
+
 ---
 
 ## Tool Access Control
@@ -162,7 +219,7 @@ providers:
       enabled: false
 ```
 
-### Enable Agent SDK Provider (Default)
+### Enable Agent SDK Provider
 ```yaml
 router:
   defaultProvider: agent-sdk
@@ -174,6 +231,21 @@ providers:
     - id: agent-sdk
       enabled: true
       providerType: agent-sdk
+```
+
+### Enable Codex CLI Provider
+```yaml
+router:
+  defaultProvider: codex-cli
+
+providers:
+  codex-provider:
+    - id: codex-cli
+      providerType: cli
+      cliPath: codex
+      workingDirectory: /path/to/workspace
+      model: gpt-5.4
+      fullAuto: true
 ```
 
 ---

@@ -11,7 +11,14 @@ import type { ConfigStore } from '../config/store.js';
 import type { Logger } from '../utils/logger.js';
 import { SessionManager, type SessionOptions } from './session.js';
 import { MessageRouter, type RouterOptions } from './router.js';
-import { MODEL_ALIASES, MODEL_DISPLAY_NAMES } from '../providers/model-config.js';
+import {
+  MODEL_ALIASES,
+  MODEL_DISPLAY_NAMES,
+  getAvailableModelsForProvider,
+  getDisplayModelName,
+  isCodexProvider,
+  type ProviderModelTarget,
+} from '../providers/model-config.js';
 
 export interface GatewayConfig {
   /** Gateway ID */
@@ -199,6 +206,17 @@ export class Gateway extends EventEmitter {
         this.logger.info(`Channel stopped: ${channel.id}`);
       } catch (error) {
         this.logger.error(`Failed to stop channel ${channel.id}: ${error}`);
+      }
+    }
+
+    // Clean up providers after channels are stopped so provider-owned timers and
+    // subprocesses do not outlive the gateway process.
+    for (const provider of this.router.getProviders()) {
+      try {
+        await provider.cleanup?.();
+        this.logger.info(`Provider cleaned up: ${provider.id}`);
+      } catch (error) {
+        this.logger.error(`Failed to clean up provider ${provider.id}: ${error}`);
       }
     }
 
@@ -558,27 +576,37 @@ export class Gateway extends EventEmitter {
     // No argument: show current model and available models
     if (!modelAlias) {
       const session = await this.sessions.getOrCreate(message);
-      const currentModel = (session.data.model as string) || 'default';
-      const currentDisplayName = MODEL_DISPLAY_NAMES[currentModel] || currentModel;
+      const provider = this.getEffectiveModelProviderTarget(session.data.providerId as string | undefined);
+      const currentModel = (session.data.model as string) || '';
+      const currentDisplayName = getDisplayModelName(currentModel, provider);
 
-      const modelsList = Object.entries(MODEL_DISPLAY_NAMES)
-        .map(([alias, name]) => {
-          const isCurrent = alias === currentModel ? ' ← 当前' : '';
-          return `- ${alias.padEnd(10)} - ${name}${isCurrent}`;
-        })
-        .join('\n');
+      const content = this.isCodexModelProvider(provider)
+        ? `📊 **当前模型:** ${currentDisplayName}\n\n**可用模型:**\n- 输入任意模型字符串，例如 \`/model gpt-5.4\`\n- 留空表示使用 provider 默认模型`
+        : (() => {
+            const modelsList = Object.entries(MODEL_DISPLAY_NAMES)
+              .map(([alias, name]) => {
+                const isCurrent = alias === (currentModel || 'default') ? ' ← 当前' : '';
+                return `- ${alias.padEnd(10)} - ${name}${isCurrent}`;
+              })
+              .join('\n');
+
+            return `📊 **当前模型:** ${currentDisplayName}\n\n**可用模型:**\n${modelsList}`;
+          })();
 
       await channel.sendMessage({
         conversationId: message.conversationId,
-        content: `📊 **当前模型:** ${currentDisplayName}\n\n**可用模型:**\n${modelsList}`
+        content,
       });
       return;
     }
 
-    // Validate model alias
+    // Get or create session and update model setting
+    const session = await this.sessions.getOrCreate(message);
+    const provider = this.getEffectiveModelProviderTarget(session.data.providerId as string | undefined);
     const normalizedAlias = modelAlias.toLowerCase();
-    if (!MODEL_ALIASES[normalizedAlias]) {
-      const availableModels = Object.keys(MODEL_ALIASES).join(', ');
+
+    if (!this.isCodexModelProvider(provider) && !MODEL_ALIASES[normalizedAlias]) {
+      const availableModels = getAvailableModelsForProvider(provider).join(', ');
       await channel.sendMessage({
         conversationId: message.conversationId,
         content: `❌ 未知模型: ${modelAlias}\n\n可用模型: ${availableModels}`
@@ -586,12 +614,11 @@ export class Gateway extends EventEmitter {
       return;
     }
 
-    // Get or create session and update model setting
-    const session = await this.sessions.getOrCreate(message);
-    const displayName = MODEL_DISPLAY_NAMES[normalizedAlias];
+    const storedModel = this.isCodexModelProvider(provider) ? modelAlias : normalizedAlias;
+    const displayName = getDisplayModelName(storedModel, provider);
 
     // Update session model with alias (router will convert to appropriate value for each provider)
-    session.data.model = normalizedAlias;
+    session.data.model = storedModel;
     session.lastActivity = new Date();
 
     await channel.sendMessage({
@@ -599,7 +626,20 @@ export class Gateway extends EventEmitter {
       content: `✅ 模型已切换为: **${displayName}**\n\n当前会话将使用新模型。`
     });
 
-    this.logger?.info(`Model switched for session ${session.id}: ${displayName} (${normalizedAlias})`);
+    this.logger?.info(`Model switched for session ${session.id}: ${displayName} (${storedModel})`);
+  }
+
+  private getEffectiveModelProviderTarget(providerId?: string): ProviderModelTarget | undefined {
+    const effectiveProviderId = providerId ?? this.config.router?.defaultProvider;
+    if (!effectiveProviderId) {
+      return undefined;
+    }
+
+    return this.router.getProvider(effectiveProviderId) ?? { id: effectiveProviderId };
+  }
+
+  private isCodexModelProvider(provider?: ProviderModelTarget): boolean {
+    return isCodexProvider(provider);
   }
 
   /**
@@ -732,6 +772,9 @@ export class Gateway extends EventEmitter {
         const channels = this.configStore.get<object[]>(`channels.${plugin.id}`, []);
         for (const config of channels) {
           try {
+            if (!this.isComponentEnabled(config)) {
+              continue;
+            }
             const channel = plugin.createChannel(config);
             this.registerChannel(channel, config);
           } catch (error) {
@@ -748,6 +791,9 @@ export class Gateway extends EventEmitter {
         const providers = this.configStore.get<object[]>(`providers.${plugin.id}`, []);
         for (const config of providers) {
           try {
+            if (!this.isComponentEnabled(config)) {
+              continue;
+            }
             const provider = plugin.createProvider(config);
             this.registerProvider(provider, config);
           } catch (error) {
@@ -756,5 +802,10 @@ export class Gateway extends EventEmitter {
         }
       }
     }
+  }
+
+  private isComponentEnabled(config: object): boolean {
+    const enabled = (config as { enabled?: unknown }).enabled;
+    return enabled !== false;
   }
 }

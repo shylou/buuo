@@ -31,6 +31,55 @@ export const MODEL_DISPLAY_NAMES: Record<string, string> = {
   'opus': 'Opus 4.6',
 };
 
+export interface ProviderModelTarget {
+  id?: string;
+  name?: string;
+}
+
+type ProviderHint = string | ProviderModelTarget | undefined;
+
+function getProviderHint(provider: ProviderHint): { id?: string; name?: string } {
+  if (!provider) {
+    return {};
+  }
+
+  if (typeof provider === 'string') {
+    return { id: provider, name: provider };
+  }
+
+  return provider;
+}
+
+export function isAgentSdkProvider(provider?: ProviderHint): boolean {
+  const hint = getProviderHint(provider);
+  return hint.id === 'agent-sdk' || hint.name === 'Agent SDK';
+}
+
+export function isCodexProvider(provider?: ProviderHint): boolean {
+  const hint = getProviderHint(provider);
+  return hint.id === 'codex-cli' || hint.name === 'Codex CLI';
+}
+
+export function getAvailableModelsForProvider(provider?: ProviderHint): string[] {
+  if (isCodexProvider(provider)) {
+    return [];
+  }
+
+  return Object.keys(MODEL_ALIASES);
+}
+
+export function getDisplayModelName(model: string, provider?: ProviderHint): string {
+  if (!model) {
+    return isCodexProvider(provider) ? 'provider default' : MODEL_DISPLAY_NAMES.default;
+  }
+
+  if (isCodexProvider(provider)) {
+    return model;
+  }
+
+  return MODEL_DISPLAY_NAMES[model] || model;
+}
+
 /** Check if a model alias is valid */
 export function isValidModelAlias(alias: string): boolean {
   if (typeof alias !== 'string') return false;
@@ -72,10 +121,14 @@ export function getModelAlias(modelId: string): string {
  * - CLI provider: needs full model ID
  * - Agent SDK provider: needs alias to read from settings.json
  */
-export function getModelForProvider(model: string, providerType?: string): string {
+export function getModelForProvider(model: string, provider?: ProviderHint): string {
   // Agent SDK provider uses alias to read from settings.json
-  if (providerType === 'agent-sdk') {
+  if (isAgentSdkProvider(provider)) {
     return getModelAlias(model);
+  }
+  // Codex uses raw model strings as-is.
+  if (isCodexProvider(provider)) {
+    return model;
   }
   // CLI and other providers use full model ID
   return getModelId(model) || model;

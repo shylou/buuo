@@ -2,12 +2,13 @@
  * MessageRouter tests
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MessageRouter } from './router.js';
 import { BaseChannel } from '../channels/index.js';
 import { BaseProvider } from '../providers/index.js';
 import type { IncomingMessage, OutgoingMessage } from '../channels/index.js';
 import type { ChatRequest, ChatResponse } from '../providers/index.js';
+import type { Logger } from '../utils/logger.js';
 
 class MockChannel extends BaseChannel {
   constructor() {
@@ -28,6 +29,7 @@ class MockChannel extends BaseChannel {
 
 class MockProvider extends BaseProvider {
   public initialized = false;
+  public lastRequest: ChatRequest | null = null;
 
   constructor() {
     super('test-provider', 'Test Provider');
@@ -43,6 +45,7 @@ class MockProvider extends BaseProvider {
   }
 
   protected async doChat(request: ChatRequest): Promise<ChatResponse> {
+    this.lastRequest = request;
     return {
       content: `Response to: ${request.messages[request.messages.length - 1]?.content}`,
       done: true,
@@ -50,7 +53,8 @@ class MockProvider extends BaseProvider {
     };
   }
 
-  protected async *doChatStream(_request: ChatRequest): AsyncIterable<ChatResponse> {
+  protected async *doChatStream(request: ChatRequest): AsyncIterable<ChatResponse> {
+    this.lastRequest = request;
     yield {
       content: 'Stream ',
       done: false
@@ -75,14 +79,25 @@ describe('MessageRouter', () => {
   let router: MessageRouter;
   let channel: MockChannel;
   let provider: MockProvider;
+  let logger: Logger;
 
   beforeEach(() => {
+    logger = {
+      trace: vi.fn(),
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+      child: vi.fn(),
+    };
+
     router = new MessageRouter({
       defaultProvider: 'test-provider',
       temperature: 0.7,
       maxTokens: 4096,
       stream: false
-    });
+    }, logger);
 
     channel = new MockChannel();
     provider = new MockProvider();
@@ -212,5 +227,102 @@ describe('MessageRouter', () => {
 
     expect(channel.sentMessages).toHaveLength(1);
     expect(channel.sentMessages[0].conversationId).toBe('conv-1');
+  });
+
+  it('should not inject a default model when session model is unset', async () => {
+    await provider.initialize({});
+    router.registerProvider(provider);
+
+    const session = createMockSession();
+    const message = createMockMessage();
+
+    const responses = await router.route(session, message);
+
+    for await (const _response of responses) {
+      // drain
+    }
+
+    expect(provider.lastRequest).not.toBeNull();
+    expect(provider.lastRequest?.model).toBeUndefined();
+  });
+
+  it('should pass through an explicit raw model when session model is set', async () => {
+    await provider.initialize({});
+    router.registerProvider(provider);
+
+    const session = createMockSession();
+    session.data.model = 'gpt-5.4';
+    const message = createMockMessage();
+
+    const responses = await router.route(session, message);
+
+    for await (const _response of responses) {
+      // drain
+    }
+
+    expect(provider.lastRequest).not.toBeNull();
+    expect(provider.lastRequest?.model).toBe('gpt-5.4');
+  });
+
+  it('should route to codex-cli and persist the provider id on the session', async () => {
+    const codexProvider = new MockProvider();
+    (codexProvider as { id: string }).id = 'codex-cli';
+
+    const codexRouter = new MessageRouter({
+      defaultProvider: 'codex-cli',
+      stream: false,
+    });
+
+    await codexProvider.initialize({});
+    codexRouter.registerProvider(codexProvider);
+
+    const session = createMockSession();
+    const message = createMockMessage();
+
+    const responses = await codexRouter.route(session, message);
+
+    for await (const _response of responses) {
+      // drain
+    }
+
+    expect(session.data.providerId).toBe('codex-cli');
+    expect(codexProvider.lastRequest?.sessionId).toBe(session.id);
+  });
+
+  it('should log provider routing details at info level', async () => {
+    const codexProvider = new MockProvider();
+    (codexProvider as { id: string }).id = 'codex-cli';
+    codexProvider['_status'] = {
+      available: true,
+      state: 'ready',
+      model: 'gpt-5.4',
+    };
+
+    const codexRouter = new MessageRouter({
+      defaultProvider: 'codex-cli',
+      stream: false,
+    }, logger);
+
+    await codexProvider.initialize({});
+    codexRouter.registerProvider(codexProvider);
+
+    const session = createMockSession();
+    const message = createMockMessage();
+
+    const responses = await codexRouter.route(session, message);
+    for await (const _response of responses) {
+      // drain
+    }
+
+    expect(logger.info).toHaveBeenCalledWith('Message routed', expect.objectContaining({
+      messageId: 'msg-1',
+      conversationId: 'conv-1',
+      sessionId: 'session-1',
+      providerId: 'codex-cli',
+      requestedProviderId: 'codex-cli',
+      requestedModel: 'test-model',
+      effectiveModel: 'test-model',
+      stream: false,
+    }));
   });
 });

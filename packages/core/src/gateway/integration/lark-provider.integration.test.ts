@@ -121,6 +121,7 @@ class MockClaudeCodeProvider extends EventEmitter implements AIProvider {
 
   initialized = false;
   chatHistory: any[] = [];
+  lastRequest: any = null;
   public trackedMessageIds = new Set<string>();
 
   async initialize(_config: any): Promise<void> {
@@ -146,6 +147,7 @@ class MockClaudeCodeProvider extends EventEmitter implements AIProvider {
   }
 
   async chat(request: any): Promise<ChatResponse> {
+    this.lastRequest = request;
     // Track messages for testing
     this.trackMessages(request.messages);
 
@@ -157,6 +159,7 @@ class MockClaudeCodeProvider extends EventEmitter implements AIProvider {
   }
 
   async *chatStream(request: any): AsyncGenerator<ChatResponse> {
+    this.lastRequest = request;
     // Track messages for testing
     this.trackMessages(request.messages);
 
@@ -196,6 +199,12 @@ class MockClaudeCodeProvider extends EventEmitter implements AIProvider {
       model: 'mock-model'
     };
   }
+}
+
+class MockCodexProvider extends MockClaudeCodeProvider {
+  readonly id = 'codex-cli';
+  readonly name = 'Codex CLI';
+  readonly type = 'cli';
 }
 
 // ========== Test Helpers ==========
@@ -504,5 +513,55 @@ describe('Gateway Integration - Command Handling', () => {
       // Should send response message ("No active request" or other)
       expect(mockLark.sentMessages.length).toBeGreaterThan(0);
     });
+  });
+});
+
+describe('Gateway Integration - Codex Model Routing', () => {
+  it('should route a raw codex model selected via /model into the provider request', async () => {
+    const mockPlugins = new MockPluginManager();
+    const mockConfig = new MockConfigStore();
+    const mockLogger = new MockLogger();
+
+    const mockLark = new MockLarkChannel();
+    const mockProvider = new MockCodexProvider();
+
+    mockPlugins.mockChannels = [mockLark];
+    mockPlugins.mockProviders = [mockProvider];
+
+    const gateway = new Gateway(
+      {
+        id: 'test-codex-gateway',
+        session: {
+          maxHistory: 100,
+        },
+        router: {
+          defaultProvider: 'codex-cli',
+        },
+      },
+      mockPlugins as any,
+      mockConfig as any,
+      mockLogger
+    );
+
+    gateway.router.registerChannel(mockLark);
+    gateway.router.registerProvider(mockProvider);
+
+    await gateway.initialize();
+    await gateway.start();
+
+    await gateway.handleMessage(createIncomingMessage({
+      conversationId: 'codex_chat_001',
+      content: '/model gpt-5.4-mini',
+    }));
+
+    await gateway.handleMessage(createIncomingMessage({
+      id: 'msg_codex_002',
+      conversationId: 'codex_chat_001',
+      content: 'Use the selected codex model',
+    }));
+
+    expect(mockProvider.lastRequest?.model).toBe('gpt-5.4-mini');
+    expect(mockProvider.lastRequest?.sessionId).toBeDefined();
+    expect(mockLark.sentMessages.length).toBeGreaterThan(0);
   });
 });

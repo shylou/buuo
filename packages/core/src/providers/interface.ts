@@ -34,6 +34,11 @@ export interface AIProvider {
    * Get provider status
    */
   getStatus(): ProviderStatus;
+
+  /**
+   * Optional provider-specific cleanup for timers, subprocesses, and cached state
+   */
+  cleanup?(): Promise<void>;
 }
 
 export interface ProviderConfig {

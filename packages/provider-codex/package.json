@@ -1,7 +1,7 @@
 {
-  "name": "@buuo/channel-lark",
+  "name": "@buuo/provider-codex",
   "version": "0.1.0",
-  "description": "Lark/Feishu channel plugin for Buuo AI Assistant",
+  "description": "Codex CLI provider plugin for Buuo AI Assistant",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -23,19 +23,18 @@
   },
   "keywords": [
     "buuo",
-    "channel",
-    "lark",
-    "feishu"
+    "provider",
+    "codex",
+    "openai"
   ],
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@buuo/core": "workspace:*",
-    "@larksuiteoapi/node-sdk": "^1.35.0",
-    "axios": "^1.13.6"
+    "@buuo/core": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.6.0",
+    "vitest": "^2.0.0"
   }
 }

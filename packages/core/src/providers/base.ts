@@ -46,7 +46,7 @@ export abstract class BaseProvider extends EventEmitter implements AIProvider {
     this._status = {
       available: true,
       state: 'ready',
-      model: config.model
+      model: config.model ?? this._status.model
     };
     this.emit('initialized');
     this.emit('status:change', this.status);
@@ -87,6 +87,10 @@ export abstract class BaseProvider extends EventEmitter implements AIProvider {
 
   getStatus(): ProviderStatus {
     return { ...this._status };
+  }
+
+  async cleanup(): Promise<void> {
+    // Default no-op. Providers can override when they manage timers or subprocesses.
   }
 
   /**

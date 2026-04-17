@@ -10,7 +10,10 @@ import {
   isValidModelAlias,
   getModelId,
   getModelAlias,
-  getModelForProvider
+  getModelForProvider,
+  isCodexProvider,
+  isAgentSdkProvider,
+  getDisplayModelName,
 } from './model-config.js';
 
 describe('Model Configuration', () => {
@@ -138,6 +141,23 @@ describe('Model Configuration', () => {
 
     it('should handle undefined provider type', () => {
       expect(getModelForProvider('sonnet', undefined)).toBe('claude-sonnet-4-6');
+    });
+
+    it('should use provider names when ids are customized', () => {
+      expect(getModelForProvider('claude-sonnet-4-6', { id: 'claude-primary', name: 'Agent SDK' })).toBe('sonnet');
+      expect(getModelForProvider('sonnet', { id: 'codex-primary', name: 'Codex CLI' })).toBe('sonnet');
+    });
+  });
+
+  describe('provider detection', () => {
+    it('should detect providers by canonical names', () => {
+      expect(isAgentSdkProvider({ id: 'claude-primary', name: 'Agent SDK' })).toBe(true);
+      expect(isCodexProvider({ id: 'codex-primary', name: 'Codex CLI' })).toBe(true);
+    });
+
+    it('should preserve codex display naming with renamed providers', () => {
+      expect(getDisplayModelName('', { id: 'codex-primary', name: 'Codex CLI' })).toBe('provider default');
+      expect(getDisplayModelName('gpt-5.4-mini', { id: 'codex-primary', name: 'Codex CLI' })).toBe('gpt-5.4-mini');
     });
   });
 });
